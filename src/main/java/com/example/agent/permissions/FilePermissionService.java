@@ -31,6 +31,10 @@ public final class FilePermissionService {
         policyGate.checkCreateContent(content);
     }
 
+    public void checkProposedContent(String content) {
+        policyGate.checkProposedContent(content);
+    }
+
     public Path projectRoot() {
         return boundaryGate.projectRoot();
     }

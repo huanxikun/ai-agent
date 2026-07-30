@@ -1,5 +1,8 @@
 package com.example.agent.tools;
 
+import com.example.agent.hooks.HookContext;
+import com.example.agent.hooks.HookEvent;
+import com.example.agent.hooks.HookRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -11,9 +14,11 @@ import java.util.Map;
 public final class ToolRegistry {
     private final Map<String,ToolDefinition> tools = new LinkedHashMap<>();
     private final ObjectMapper json;
+    private final HookRegistry hooks;
 
-    public ToolRegistry(ObjectMapper json){
+    public ToolRegistry(ObjectMapper json, HookRegistry hooks){
         this.json = json;
+        this.hooks = hooks;
     }
 
     public ToolRegistry register(ToolDefinition tool){
@@ -36,14 +41,32 @@ public final class ToolRegistry {
         return definitions;
     }
 
-    public String execute(String name, JsonNode arguments) throws Exception{
+    public String execute(
+            String name,
+            JsonNode arguments,
+            HookContext context
+    ) throws Exception {
         ToolDefinition tool = tools.get(name);
 
         if(tool == null){
             throw new IllegalArgumentException("未知工具："+name);
         }
 
-        return tool.handler().execute(arguments);
+        hooks.trigger_hooks(HookEvent.PRE_TOOL_USE, context);
+        try {
+            String output = tool.handler().execute(arguments, context);
+            context.complete(output);
+            hooks.trigger_hooks(HookEvent.POST_TOOL_USE, context);
+            return output;
+        } catch (Exception exception) {
+            context.fail(exception);
+            try {
+                hooks.trigger_hooks(HookEvent.POST_TOOL_USE, context);
+            } catch (Exception hookException) {
+                exception.addSuppressed(hookException);
+            }
+            throw exception;
+        }
     }
 
 

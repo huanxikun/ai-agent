@@ -125,14 +125,18 @@ public final class FilePolicyGate {
     }
 
     public void checkCreateContent(String content) {
+        checkProposedContent(content);
+    }
+
+    public void checkProposedContent(String content) {
         if (content == null) {
             throw new IllegalArgumentException("content 不能为空");
         }
         if (content.getBytes(StandardCharsets.UTF_8).length > MAX_TEXT_FILE_BYTES) {
-            throw new SecurityException("闸门 2 拒绝：新文件内容超过 1 MiB");
+            throw new SecurityException("闸门 2 拒绝：文件内容超过 1 MiB");
         }
         if (content.indexOf('\0') >= 0) {
-            throw new SecurityException("闸门 2 拒绝：新文件内容疑似二进制");
+            throw new SecurityException("闸门 2 拒绝：文件内容疑似二进制");
         }
     }
 

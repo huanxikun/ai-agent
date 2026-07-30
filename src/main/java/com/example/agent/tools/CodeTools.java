@@ -1,8 +1,10 @@
 package com.example.agent.tools;
 
+import com.example.agent.hooks.HookContext;
+import com.example.agent.hooks.HookEvent;
+import com.example.agent.hooks.HookRegistry;
+import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.permissions.FileOperation;
-import com.example.agent.permissions.FilePermissionService;
-import com.example.agent.permissions.FilePolicyGate;
 import com.example.agent.permissions.HumanApprovalGate;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,17 +29,18 @@ public final class CodeTools {
 
     private final Path projectRoot;
     private final ObjectMapper json;
-    private final FilePermissionService permissions;
     private final HumanApprovalGate approvals;
+    private final HookRegistry hooks;
 
     public CodeTools(
-            FilePermissionService permissions,
+            Path projectRoot,
             HumanApprovalGate approvals,
+            HookRegistry hooks,
             ObjectMapper json
     ) {
-        this.projectRoot = permissions.projectRoot();
-        this.permissions = permissions;
+        this.projectRoot = projectRoot.toAbsolutePath().normalize();
         this.approvals = approvals;
+        this.hooks = hooks;
         this.json = json;
     }
 
@@ -85,14 +88,14 @@ public final class CodeTools {
                 "list_files",
                 "列出项目中的文件。用于了解项目结构和定位可能相关的代码。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String path = arguments.path("path").asText(".");
                     int maxDepth = Math.max(
                             1,
                             Math.min(arguments.path("maxDepth").asInt(4), 6)
                     );
 
-                    Path directory = permissions.check(path, FileOperation.LIST);
+                    Path directory = resolvedPath(context);
 
                     try (Stream<Path> paths = Files.walk(directory, maxDepth)) {
                         return paths
@@ -136,11 +139,11 @@ public final class CodeTools {
                 "read_file",
                 "读取项目中的文本文件，并返回带行号的内容。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String relativePath =
                             arguments.path("path").asText();
 
-                    Path file = permissions.check(relativePath, FileOperation.READ);
+                    Path file = resolvedPath(context);
 
                     List<String> lines = Files.readAllLines(
                             file,
@@ -210,7 +213,7 @@ public final class CodeTools {
                 "search_code",
                 "在项目文本文件中搜索代码或关键词，返回文件路径、行号和匹配内容。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String query = arguments.path("query").asText();
                     String path = arguments.path("path").asText(".");
 
@@ -220,7 +223,7 @@ public final class CodeTools {
                         );
                     }
 
-                    Path directory = permissions.check(path, FileOperation.SEARCH);
+                    Path directory = resolvedPath(context);
                     StringBuilder result = new StringBuilder();
                     int matches = 0;
 
@@ -292,28 +295,29 @@ public final class CodeTools {
                 "create_file",
                 "创建新的文本文件，绝不覆盖已有文件。调用只创建审批请求；用户批准后才落盘。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String relativePath = arguments.path("path").asText();
                     String content = arguments.path("content").asText(null);
-                    permissions.checkCreateContent(content);
 
-                    Path file = permissions.check(relativePath, FileOperation.CREATE);
+                    Path file = resolvedPath(context);
                     String displayPath = displayPath(file);
+                    JsonNode approvedArguments = arguments.deepCopy();
                     HumanApprovalGate.ApprovalRequest request = approvals.request(
                             FileOperation.CREATE,
                             displayPath,
                             createPreview(displayPath, content),
-                            () -> {
-                                Path approvedFile = permissions.check(
-                                        relativePath,
-                                        FileOperation.CREATE
-                                );
-                                createAtomically(approvedFile, content);
-                                return json.writeValueAsString(Map.of(
-                                        "message", "文件创建成功",
-                                        "path", displayPath
-                                ));
-                            }
+                            () -> executeApproved(
+                                    "create_file",
+                                    approvedArguments,
+                                    context,
+                                    approvedFile -> {
+                                        createAtomically(approvedFile, content);
+                                        return json.writeValueAsString(Map.of(
+                                                "message", "文件创建成功",
+                                                "path", displayPath
+                                        ));
+                                    }
+                            )
                     );
                     return json.writeValueAsString(request);
                 }
@@ -343,13 +347,12 @@ public final class CodeTools {
                 "edit_file",
                 "精确替换现有文本文件中的一段内容。调用只会创建审批请求；用户批准后才写入。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String relativePath = arguments.path("path").asText();
                     String oldText = arguments.path("oldText").asText(null);
                     String newText = arguments.path("newText").asText(null);
-                    permissions.checkReplacement(oldText, newText);
 
-                    Path file = permissions.check(relativePath, FileOperation.EDIT);
+                    Path file = resolvedPath(context);
                     String before = Files.readString(file, StandardCharsets.UTF_8);
                     int occurrences = countOccurrences(before, oldText);
                     if (occurrences != 1) {
@@ -361,37 +364,35 @@ public final class CodeTools {
                     }
 
                     String after = before.replace(oldText, newText);
-                    if (after.getBytes(StandardCharsets.UTF_8).length
-                            > FilePolicyGate.MAX_TEXT_FILE_BYTES) {
-                        throw new SecurityException("闸门 2 拒绝：修改后的文件超过 1 MiB");
-                    }
                     String expectedHash = sha256(before);
                     String displayPath = displayPath(file);
+                    JsonNode approvedArguments = arguments.deepCopy();
 
                     HumanApprovalGate.ApprovalRequest request = approvals.request(
                             FileOperation.EDIT,
                             displayPath,
                             editPreview(displayPath, oldText, newText),
-                            () -> {
-                                Path approvedFile = permissions.check(
-                                        relativePath,
-                                        FileOperation.EDIT
-                                );
-                                String current = Files.readString(
-                                        approvedFile,
-                                        StandardCharsets.UTF_8
-                                );
-                                if (!sha256(current).equals(expectedHash)) {
-                                    throw new IllegalStateException(
-                                            "文件在等待审批期间发生变化，本次修改已取消"
-                                    );
-                                }
-                                replaceAtomically(approvedFile, after);
-                                return json.writeValueAsString(Map.of(
-                                        "message", "文件修改成功",
-                                        "path", displayPath
-                                ));
-                            }
+                            () -> executeApproved(
+                                    "edit_file",
+                                    approvedArguments,
+                                    context,
+                                    approvedFile -> {
+                                        String current = Files.readString(
+                                                approvedFile,
+                                                StandardCharsets.UTF_8
+                                        );
+                                        if (!sha256(current).equals(expectedHash)) {
+                                            throw new IllegalStateException(
+                                                    "文件在等待审批期间发生变化，本次修改已取消"
+                                            );
+                                        }
+                                        replaceAtomically(approvedFile, after);
+                                        return json.writeValueAsString(Map.of(
+                                                "message", "文件修改成功",
+                                                "path", displayPath
+                                        ));
+                                    }
+                            )
                     );
                     return json.writeValueAsString(request);
                 }
@@ -412,38 +413,40 @@ public final class CodeTools {
                 "delete_file",
                 "删除项目中的一个文本文件。调用只会创建审批请求；用户批准后才删除。",
                 parameters,
-                arguments -> {
+                (arguments, context) -> {
                     String relativePath = arguments.path("path").asText();
-                    Path file = permissions.check(relativePath, FileOperation.DELETE);
+                    Path file = resolvedPath(context);
                     String before = Files.readString(file, StandardCharsets.UTF_8);
                     String expectedHash = sha256(before);
                     String displayPath = displayPath(file);
                     long size = Files.size(file);
+                    JsonNode approvedArguments = arguments.deepCopy();
 
                     HumanApprovalGate.ApprovalRequest request = approvals.request(
                             FileOperation.DELETE,
                             displayPath,
                             "删除文件：" + displayPath + "\n文件大小：" + size + " bytes",
-                            () -> {
-                                Path approvedFile = permissions.check(
-                                        relativePath,
-                                        FileOperation.DELETE
-                                );
-                                String current = Files.readString(
-                                        approvedFile,
-                                        StandardCharsets.UTF_8
-                                );
-                                if (!sha256(current).equals(expectedHash)) {
-                                    throw new IllegalStateException(
-                                            "文件在等待审批期间发生变化，本次删除已取消"
-                                    );
-                                }
-                                Files.delete(approvedFile);
-                                return json.writeValueAsString(Map.of(
-                                        "message", "文件删除成功",
-                                        "path", displayPath
-                                ));
-                            }
+                            () -> executeApproved(
+                                    "delete_file",
+                                    approvedArguments,
+                                    context,
+                                    approvedFile -> {
+                                        String current = Files.readString(
+                                                approvedFile,
+                                                StandardCharsets.UTF_8
+                                        );
+                                        if (!sha256(current).equals(expectedHash)) {
+                                            throw new IllegalStateException(
+                                                    "文件在等待审批期间发生变化，本次删除已取消"
+                                            );
+                                        }
+                                        Files.delete(approvedFile);
+                                        return json.writeValueAsString(Map.of(
+                                                "message", "文件删除成功",
+                                                "path", displayPath
+                                        ));
+                                    }
+                            )
                     );
                     return json.writeValueAsString(request);
                 }
@@ -454,6 +457,42 @@ public final class CodeTools {
         return projectRoot.relativize(file)
                 .toString()
                 .replace('\\', '/');
+    }
+
+    private Path resolvedPath(HookContext context) {
+        return context.require(PermissionHooks.RESOLVED_PATH, Path.class);
+    }
+
+    private String executeApproved(
+            String toolName,
+            JsonNode arguments,
+            HookContext originalContext,
+            ApprovedMutation mutation
+    ) throws Exception {
+        HookContext approvalContext = HookContext.forTool(
+                originalContext.runId(),
+                originalContext.userPrompt(),
+                toolName,
+                arguments,
+                originalContext.step()
+        );
+        approvalContext.put("approval.execution", true);
+        hooks.trigger_hooks(HookEvent.PRE_TOOL_USE, approvalContext);
+
+        try {
+            String output = mutation.execute(resolvedPath(approvalContext));
+            approvalContext.complete(output);
+            hooks.trigger_hooks(HookEvent.POST_TOOL_USE, approvalContext);
+            return output;
+        } catch (Exception exception) {
+            approvalContext.fail(exception);
+            try {
+                hooks.trigger_hooks(HookEvent.POST_TOOL_USE, approvalContext);
+            } catch (Exception hookException) {
+                exception.addSuppressed(hookException);
+            }
+            throw exception;
+        }
     }
 
     private String editPreview(String path, String oldText, String newText) {
@@ -514,5 +553,10 @@ public final class CodeTools {
         } finally {
             Files.deleteIfExists(temporary);
         }
+    }
+
+    @FunctionalInterface
+    private interface ApprovedMutation {
+        String execute(Path path) throws Exception;
     }
 }

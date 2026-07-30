@@ -1,5 +1,9 @@
 package com.example.agent.permissions;
 
+import com.example.agent.hooks.DefaultAgentHooks;
+import com.example.agent.hooks.HookContext;
+import com.example.agent.hooks.HookRegistry;
+import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -28,13 +32,17 @@ class PermissionFlowTest {
     private FilePermissionService permissions;
     private HumanApprovalGate approvals;
     private ToolRegistry tools;
+    private HookRegistry hooks;
 
     @BeforeEach
     void setUp() throws Exception {
         permissions = new FilePermissionService(projectRoot);
         approvals = new HumanApprovalGate();
-        tools = new ToolRegistry(JSON);
-        new CodeTools(permissions, approvals, JSON).registerInto(tools);
+        hooks = new HookRegistry();
+        DefaultAgentHooks.register_hooks(hooks);
+        PermissionHooks.register_hooks(hooks, permissions);
+        tools = new ToolRegistry(JSON, hooks);
+        new CodeTools(projectRoot, approvals, hooks, JSON).registerInto(tools);
     }
 
     @Test
@@ -66,7 +74,7 @@ class PermissionFlowTest {
         Path file = projectRoot.resolve("Example.java");
         Files.writeString(file, "class Example { int value = 1; }");
 
-        JsonNode request = JSON.readTree(tools.execute(
+        JsonNode request = JSON.readTree(executeTool(
                 "edit_file",
                 editArguments("Example.java", "value = 1", "value = 2")
         ));
@@ -86,7 +94,7 @@ class PermissionFlowTest {
     @Test
     void createOnlyRunsAfterApprovalAndNeverOverwrites() throws Exception {
         Path file = projectRoot.resolve("Created.java");
-        JsonNode request = JSON.readTree(tools.execute(
+        JsonNode request = JSON.readTree(executeTool(
                 "create_file",
                 createArguments("Created.java", "class Created {}")
         ));
@@ -99,7 +107,7 @@ class PermissionFlowTest {
         assertEquals("class Created {}", Files.readString(file));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> tools.execute(
+                () -> executeTool(
                         "create_file",
                         createArguments("Created.java", "overwrite")
                 )
@@ -110,7 +118,7 @@ class PermissionFlowTest {
     @Test
     void fileCreatedWhileWaitingCancelsApproval() throws Exception {
         Path file = projectRoot.resolve("Race.txt");
-        JsonNode request = JSON.readTree(tools.execute(
+        JsonNode request = JSON.readTree(executeTool(
                 "create_file",
                 createArguments("Race.txt", "agent content")
         ));
@@ -128,7 +136,7 @@ class PermissionFlowTest {
     void changedFileCancelsApprovedEdit() throws Exception {
         Path file = projectRoot.resolve("Example.java");
         Files.writeString(file, "before");
-        JsonNode request = JSON.readTree(tools.execute(
+        JsonNode request = JSON.readTree(executeTool(
                 "edit_file",
                 editArguments("Example.java", "before", "after")
         ));
@@ -146,7 +154,7 @@ class PermissionFlowTest {
     void rejectedDeleteKeepsFileAndApprovedDeleteRemovesIt() throws Exception {
         Path keep = projectRoot.resolve("keep.txt");
         Files.writeString(keep, "keep");
-        JsonNode rejected = JSON.readTree(tools.execute(
+        JsonNode rejected = JSON.readTree(executeTool(
                 "delete_file",
                 pathArguments("keep.txt")
         ));
@@ -155,7 +163,7 @@ class PermissionFlowTest {
 
         Path remove = projectRoot.resolve("remove.txt");
         Files.writeString(remove, "remove", StandardCharsets.UTF_8);
-        JsonNode approved = JSON.readTree(tools.execute(
+        JsonNode approved = JSON.readTree(executeTool(
                 "delete_file",
                 pathArguments("remove.txt")
         ));
@@ -186,6 +194,20 @@ class PermissionFlowTest {
                 .put("path", path)
                 .put("oldText", oldText)
                 .put("newText", newText);
+    }
+
+    private String executeTool(String name, JsonNode arguments) throws Exception {
+        return tools.execute(
+                name,
+                arguments,
+                HookContext.forTool(
+                        "test-run",
+                        "test prompt",
+                        name,
+                        arguments,
+                        1
+                )
+        );
     }
 
     private ObjectNode createArguments(String path, String content) {

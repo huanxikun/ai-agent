@@ -369,6 +369,11 @@ textarea::placeholder { color: #6e7470; }
   box-shadow: 0 0 10px rgba(255, 200, 87, 0.35);
 }
 
+.trace-item.hook .trace-node {
+  border-color: #aa8cff;
+  box-shadow: 0 0 10px rgba(170, 140, 255, 0.3);
+}
+
 .trace-item.rejected .trace-node { border-color: var(--danger); }
 
 .trace-title {

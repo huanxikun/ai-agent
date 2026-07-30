@@ -2,6 +2,10 @@ package com.example.agent;
 
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
+import com.example.agent.hooks.DefaultAgentHooks;
+import com.example.agent.hooks.HookEvent;
+import com.example.agent.hooks.HookRegistry;
+import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -40,12 +44,17 @@ public final class AgentApplication {
 
         FilePermissionService permissions = new FilePermissionService(projectRoot);
         HumanApprovalGate approvals = new HumanApprovalGate();
-        ToolRegistry tools = new ToolRegistry(JSON);
-        new CodeTools(permissions, approvals, JSON).registerInto(tools);
+        HookRegistry hooks = new HookRegistry();
+        DefaultAgentHooks.register_hooks(hooks);
+        PermissionHooks.register_hooks(hooks, permissions);
+
+        ToolRegistry tools = new ToolRegistry(JSON, hooks);
+        new CodeTools(projectRoot, approvals, hooks, JSON).registerInto(tools);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
                 tools,
+                hooks,
                 JSON
         );
 
@@ -60,7 +69,17 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s03-permissions"
+                    "stage", "s04-hooks",
+                    "hooks", Map.of(
+                            HookEvent.USER_PROMPT_SCRIPT.displayName(),
+                            hooks.registeredCount(HookEvent.USER_PROMPT_SCRIPT),
+                            HookEvent.PRE_TOOL_USE.displayName(),
+                            hooks.registeredCount(HookEvent.PRE_TOOL_USE),
+                            HookEvent.POST_TOOL_USE.displayName(),
+                            hooks.registeredCount(HookEvent.POST_TOOL_USE),
+                            HookEvent.STOP.displayName(),
+                            hooks.registeredCount(HookEvent.STOP)
+                    )
             ));
         });
 

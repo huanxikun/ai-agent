@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="带三道权限闸门的文件 Agent" />
-    <title>My Agent · Permissions</title>
+    <meta name="description" content="支持 Agent Cycle Hooks 的代码 Agent" />
+    <title>My Agent · S04 Hooks</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -14,7 +14,7 @@
           <span class="brand-mark">A</span>
           <span>
             <strong>My Agent</strong>
-            <small>s03 · Permissions</small>
+            <small>s04 · Hooks</small>
           </span>
         </a>
         <div class="status">
@@ -26,9 +26,9 @@
       <main class="workspace">
         <section class="chat-panel">
           <div class="intro" id="intro">
-            <div class="eyebrow">STEP 03 · FILE ACTIONS</div>
-            <h1>能读代码<br />谨慎改代码</h1>
-            <p>创建、修改与删除必须依次通过工作区边界、文件策略和人工批准。</p>
+            <div class="eyebrow">STEP 04 · AGENT CYCLE</div>
+            <h1>四类 Hook<br />一个循环</h1>
+            <p>UserPromptScript、PreToolUse、PostToolUse 与 Stop 共同扩展 Agent。</p>
           </div>
           <div class="messages" id="messages" aria-live="polite"></div>
           <form class="composer" id="chatForm">
