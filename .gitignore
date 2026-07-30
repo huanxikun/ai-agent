@@ -1,5 +1,6 @@
 .env
 target/
 .agent-context/
+.memory/
 *.log
 .DS_Store

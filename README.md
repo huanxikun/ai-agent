@@ -1,97 +1,151 @@
-# My Agent · S08 Context Compact
+# My Agent · S09 Memory
 
-S08 为父 Agent 与 Subagent 加入分层上下文压缩。原则是先运行便宜、确定性的本地操作，只有本地压缩后仍超过阈值才使用一次模型摘要；API 明确拒绝过长提示时，再执行完全不调用模型的应急裁剪。
+S09 在 S08 Context Compact 之上增加一层不参与压缩的持久 Memory。压缩摘要负责当前任务连续性，Memory 负责跨压缩、跨会话仍不能丢失的用户偏好、反馈、项目事实和引用位置。
 
-## 每轮调用顺序
+实现参考：`D:\vsCode\learn\learn-claude-code\s09_memory\README.md`。
 
-每次调用业务模型之前，无条件按以下顺序执行：
-
-```text
-L3 toolResultBudget（0 API）
-  → L1 snipCompact（0 API）
-  → L2 microCompact（0 API）
-  → token 阈值检查
-      → 未超限：调用业务模型
-      → 仍超限：L4 autoCompact（1 API）→ 调用业务模型
-```
-
-只有正常业务 LLM 调用返回 HTTP 413、`prompt_too_long`、`prompt too long` 或 context-length 错误时：
+## 存储结构
 
 ```text
-reactiveCompact（0 API，UTF-8 字节级裁剪）
-  → 保留应急摘要和最近 5 条消息
-  → 仅重试业务 API 一次
+.memory/
+  MEMORY.md
+  user-preference-tabs.md
+  project-auth-background.md
+  reference-pipeline-location.md
 ```
 
-## 四层压缩
+每条记忆使用 Markdown 和 YAML frontmatter：
 
-### L3 toolResultBudget
+```markdown
+---
+name: user-preference-tabs
+description: 用户要求使用 tab 缩进
+type: user
+---
 
-- 工具结果总量超过 200 KiB 时，优先选择最大的 tool result。
-- 完整内容写入 `.agent-context/tool-results/<run-id>/`。
-- 原 tool 消息不删除，只把正文替换为包含落盘路径、字节数和 SHA-256 的占位文本。
-- 如果仍超过预算，继续选择当前最大的内联结果，直到回到预算内。
-
-`.agent-context/` 已加入 `.gitignore`，不会进入版本库。
-
-### L1 snipCompact
-
-- 消息超过 50 条时裁掉中间部分。
-- 严格保留最前 3 条和最后 47 条。
-- 裁剪后会处理断开的 tool-call 关联，避免向 API 发送孤立的工具结果。
-
-### L2 microCompact
-
-- 将距离当前超过 10 条的旧 tool result 正文替换为轻量占位符。
-- 保留消息本身、`tool_call_id` 和原始字节数，不删除整条消息。
-- 已由 L3 落盘的指针不会被覆盖。
-
-### L4 autoCompact
-
-- 使用 UTF-8 请求字节数除以 3 估算 token。
-- 默认阈值为 24,000，可通过环境变量调整：
-
-```dotenv
-CONTEXT_TOKEN_THRESHOLD=24000
+必须使用 tab 缩进，不能使用空格。
+**How to apply:** 编辑代码时始终使用制表符。
 ```
 
-- L3、L1、L2 后仍超过阈值才调用一次摘要 API。
-- 摘要覆盖压缩后的完整上下文，要求保留目标、事实、路径、工具结果、待办、约束、审批和错误。
-- 摘要完成后保留基础 system prompt、全量摘要与最近 5 条消息。
+支持四种类型：
 
-## reactiveCompact
+- `user`：稳定用户偏好
+- `feedback`：长期工作方式与反馈
+- `project`：跨会话仍有用的项目背景
+- `reference`：常用入口、文件和外部位置
 
-应急压缩不调用 LLM：
+`.memory/` 已加入 `.gitignore`。它保存在本地项目中并跨服务重启存在，但不会被提交到 Git。
 
-- 只响应业务 LLM 的实际超长错误，不参与调用前阈值判断。
-- L4 摘要调用失败时直接上抛，不会错误触发 reactiveCompact。
-- 从原上下文前 5 条构造确定性的应急摘要。
-- 保留最近 5 条消息。
-- 每条最近消息按 UTF-8 字节裁到 8 KiB。
-- 移除可能断裂的 tool-call 元数据，并把孤立工具结果转换为安全的 system 文本。
-- 压缩后仅重试 API 一次，避免无限重试。
+## Index 常驻 System
 
-## Harness 轨迹
+`MEMORY.md` 每条记忆只保留一行名称、链接和描述：
 
-父 Agent 每次模型调用前都会产生 `Context Compact` 轨迹，显示：
+```markdown
+- [user-preference-tabs](user-preference-tabs.md) — 用户要求使用 tab 缩进
+```
 
-- L3 落盘工具结果数
-- L1 删除消息数
-- L2 压缩旧工具结果数
-- 是否触发 L4 或 reactiveCompact
-- 压缩前后估算 token
-- 压缩后的消息数
+每次用户请求开始时，Memory 索引会参与 system prompt 构建。完整正文不会预加载，因此索引可以保持轻量并减少无关上下文占用。
 
-Subagent 发生实际压缩时也会输出终端记录。
+索引限制：
+
+- 最多 200 行
+- 最大 25 KiB
+- 最多扫描 200 个记忆文件
+
+## 压缩之后智能 Loading
+
+加载顺序：
+
+```text
+Build System
+  → 注入 MEMORY.md 索引
+  → 轻量 side-query 根据当前请求选择相关记忆
+  → 执行 S08：L3 → L1 → L2 → 可选 L4
+  → 将选中的完整记忆注入模型请求副本
+  → 调用业务 LLM
+```
+
+关键点：
+
+- 每个用户请求只选择一次相关记忆，最多 5 条。
+- side-query 只看到当前请求和 `name + description` 目录。
+- side-query 失败或返回无效 JSON 时，自动降级到名称与描述关键词匹配。
+- 单条加载预算 12 KiB，单请求总预算 60 KiB。
+- Memory 内容注入深拷贝后的请求，不修改 Agent 的标准消息历史。
+- 因此 Memory 正文不会被 L1/L2/L4 再次裁剪或摘要。
+- reactiveCompact 后重试业务 LLM 时，会重新把同一批记忆注入裁剪后的请求副本。
+
+## 每轮结束提取
+
+业务模型返回最终文本、没有继续调用工具时，Memory 提取器从独立的未压缩转录中寻找新信息。
+
+提取器只保存：
+
+- 明确或稳定的用户偏好
+- 反复出现的反馈和约束
+- 跨会话仍有价值的项目事实
+- 文件、系统或外部问题的长期引用位置
+
+不会保存临时进度、工具噪声、猜测、密钥或已存在的重复内容。提取失败不会让正常 Agent 回答失败，Harness 轨迹会记录跳过原因。
+
+未压缩转录与模型上下文分离：S08 可以修改或删除标准消息，而提取器仍能看到原始用户文字和原始工具结果。工具结果进入提取 prompt 前会受到单条预算限制，但本轮原始信息不会先经过 S08 摘要。
+
+## Memory 整理
+
+新增记忆后，如果文件数达到 10 条，会触发一次低频整理：
+
+- 合并重复内容
+- 处理明确过时或矛盾的记录
+- 优先保留精确用户偏好
+- 最多保留 30 条整理结果
+- 先在临时目录生成完整结果，再替换正式 Memory 文件
+
+整理结果会重建 `MEMORY.md` 索引。
+
+## 与 S08 的关系
+
+```text
+Session context
+  ├─ S08 Context Compact
+  │    当前目标、近期工具结果、剩余工作
+  │
+  └─ S09 Persistent Memory
+       用户偏好、长期反馈、项目背景、引用位置
+       文件完整保存，不参与 Context Compact
+```
+
+S08 的 `reactiveCompact` 规则保持不变：只有业务 LLM 实际返回 `prompt_too_long` 或对应 413 时才触发，并且只重试一次。
+
+## Harness 轨迹与健康接口
+
+Harness 新增两类轨迹：
+
+- `Memory · Intelligent Loading`：加载数量、字节数和压缩后注入说明
+- `Memory · End-of-turn Extraction`：新增数量和是否执行整理
+
+健康接口包含：
+
+```json
+{
+  "stage": "s09-memory",
+  "memory": {
+    "enabled": true,
+    "count": 0,
+    "intelligentLoading": true,
+    "injectedAfterCompaction": true
+  }
+}
+```
 
 ## 保留能力
 
 - S03：文件创建、修改、删除与三道权限闸门
 - S04：完整 Agent Cycle Hooks
-- S05：进程内 TodoWrite 与三轮 Nag Reminder
+- S05：进程内 TodoWrite 与三轮提醒
 - S06：只读、不可递归 Subagent
 - S07：按需加载完整 Skill
-- S08：L3→L1→L2→L4 上下文压缩与 reactiveCompact
+- S08：分层上下文压缩与业务 LLM 超长应急处理
+- S09：文件仓库、索引、智能加载、提取与整理
 
 ## 启动与验证
 

@@ -81,6 +81,45 @@ public final class DeepSeekClient {
         return summary;
     }
 
+    public String complete(
+            String systemPrompt,
+            String userPrompt,
+            int maxTokens
+    ) throws Exception {
+        if (apiKey.isBlank()) {
+            throw new IllegalStateException("请先在 .env 中配置 DEEPSEEK_API_KEY");
+        }
+        if (maxTokens < 1) {
+            throw new IllegalArgumentException("maxTokens 必须大于 0");
+        }
+
+        ArrayNode messages = json.createArrayNode();
+        messages.addObject()
+                .put("role", "system")
+                .put("content", systemPrompt);
+        messages.addObject()
+                .put("role", "user")
+                .put("content", userPrompt);
+
+        ObjectNode body = json.createObjectNode();
+        body.put("model", model);
+        body.set("messages", messages);
+        body.put("max_tokens", maxTokens);
+        body.putObject("thinking").put("type", "disabled");
+
+        JsonNode payload = send(body);
+        String text = payload.path("choices")
+                .path(0)
+                .path("message")
+                .path("content")
+                .asText("")
+                .trim();
+        if (text.isEmpty()) {
+            throw new IllegalStateException("DeepSeek 没有返回有效文本");
+        }
+        return text;
+    }
+
     private JsonNode send(ObjectNode body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))

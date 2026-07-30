@@ -36,8 +36,8 @@ async function initialize() {
     const response = await fetch("/api/health");
     const data = await response.json();
     elements.provider.textContent = data.configured
-      ? `${data.model} · S08 Context Compact`
-      : "API Key 未配置 · S08 Context Compact";
+      ? `${data.model} · S09 Memory`
+      : "API Key 未配置 · S09 Memory";
   } catch {
     elements.provider.textContent = "Java 服务未连接";
   }

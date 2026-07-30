@@ -7,6 +7,7 @@ import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
+import com.example.agent.memory.MemorySystem;
 import com.example.agent.subagents.Subagent;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoStore;
@@ -65,6 +66,11 @@ public final class AgentApplication {
                 modelClient::summarize,
                 JSON
         );
+        MemorySystem memorySystem = new MemorySystem(
+                projectRoot,
+                modelClient::complete,
+                JSON
+        );
 
         CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
         ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
@@ -92,6 +98,7 @@ public final class AgentApplication {
                 todoStore,
                 skillCatalog,
                 contextCompactor,
+                memorySystem,
                 JSON
         );
 
@@ -106,7 +113,13 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s08-context-compact",
+                    "stage", "s09-memory",
+                    "memory", Map.of(
+                            "enabled", true,
+                            "count", memorySystem.count(),
+                            "intelligentLoading", true,
+                            "injectedAfterCompaction", true
+                    ),
                     "contextCompact", Map.of(
                             "enabled", true,
                             "tokenThreshold", contextTokenThreshold,

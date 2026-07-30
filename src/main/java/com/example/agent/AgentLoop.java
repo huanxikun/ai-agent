@@ -4,6 +4,7 @@ import com.example.agent.context.ContextCompactor;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
+import com.example.agent.memory.MemorySystem;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoNagReminder;
 import com.example.agent.todos.TodoStore;
@@ -20,7 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S08 Agent Cycle：每次构建 system 并按需加载 Skill，同时分层压缩上下文。
+ * S09 Agent Cycle：在 S08 压缩之后智能加载持久记忆，并在结束时提取。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -51,6 +52,7 @@ public final class AgentLoop {
     private final TodoStore todoStore;
     private final SkillCatalog skillCatalog;
     private final ContextCompactor contextCompactor;
+    private final MemorySystem memorySystem;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -60,7 +62,7 @@ public final class AgentLoop {
             TodoStore todoStore,
             ObjectMapper json
     ) {
-        this(model, tools, hooks, todoStore, null, null, json);
+        this(model, tools, hooks, todoStore, null, null, null, json);
     }
 
     public AgentLoop(
@@ -71,7 +73,16 @@ public final class AgentLoop {
             SkillCatalog skillCatalog,
             ObjectMapper json
     ) {
-        this(model, tools, hooks, todoStore, skillCatalog, null, json);
+        this(
+                model,
+                tools,
+                hooks,
+                todoStore,
+                skillCatalog,
+                null,
+                null,
+                json
+        );
     }
 
     public AgentLoop(
@@ -83,12 +94,35 @@ public final class AgentLoop {
             ContextCompactor contextCompactor,
             ObjectMapper json
     ) {
+        this(
+                model,
+                tools,
+                hooks,
+                todoStore,
+                skillCatalog,
+                contextCompactor,
+                null,
+                json
+        );
+    }
+
+    public AgentLoop(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            TodoStore todoStore,
+            SkillCatalog skillCatalog,
+            ContextCompactor contextCompactor,
+            MemorySystem memorySystem,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.todoStore = todoStore;
         this.skillCatalog = skillCatalog;
         this.contextCompactor = contextCompactor;
+        this.memorySystem = memorySystem;
         this.json = json;
     }
 
@@ -108,6 +142,9 @@ public final class AgentLoop {
             String systemPrompt = skillCatalog == null
                     ? INSTRUCTIONS
                     : skillCatalog.buildSystemPrompt(INSTRUCTIONS);
+            if (memorySystem != null) {
+                systemPrompt = memorySystem.buildSystemPrompt(systemPrompt);
+            }
             ArrayNode messages = json.createArrayNode();
             messages.addObject()
                     .put("role", "system")
@@ -118,6 +155,18 @@ public final class AgentLoop {
                     skillCatalog == null
                             ? "已注入基础 system prompt"
                             : "已注入基础 system prompt 与可用 Skill 摘要"
+            ));
+
+            MemorySystem.LoadedMemories loadedMemories =
+                    memorySystem == null
+                            ? MemorySystem.LoadedMemories.empty()
+                            : memorySystem.loadRelevant(userMessage);
+            trace.add(event(
+                    "memory",
+                    "Memory · Intelligent Loading",
+                    "相关记忆=" + loadedMemories.entries().size()
+                            + "，加载字节=" + loadedMemories.bytes()
+                            + "；将在压缩管线后注入请求副本"
             ));
 
             hooks.trigger_hooks(
@@ -133,6 +182,10 @@ public final class AgentLoop {
             messages.addObject()
                     .put("role", "user")
                     .put("content", userMessage);
+            ArrayNode memoryTranscript = json.createArrayNode();
+            memoryTranscript.addObject()
+                    .put("role", "user")
+                    .put("content", userMessage);
 
             for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
@@ -142,7 +195,7 @@ public final class AgentLoop {
                 DeepSeekClient.ModelResponse response;
                 try {
                     response = model.createResponse(
-                            messages,
+                            requestMessages(messages, loadedMemories),
                             tools.definitions()
                     );
                 } catch (Exception exception) {
@@ -158,11 +211,12 @@ public final class AgentLoop {
                             reactive
                     ));
                     response = model.createResponse(
-                            messages,
+                            requestMessages(messages, loadedMemories),
                             tools.definitions()
                     );
                 }
                 messages.add(response.assistantMessage());
+                memoryTranscript.add(response.assistantMessage().deepCopy());
                 boolean calledTodoWrite = response.toolCalls().stream()
                         .anyMatch(call -> "todo_write".equals(call.name()));
                 boolean nagRequired = todoNag.recordRound(calledTodoWrite);
@@ -180,6 +234,7 @@ public final class AgentLoop {
                         throw new IllegalStateException("模型没有返回文本或工具调用");
                     }
                     trace.add(event("done", "运行完成", "模型返回最终答案"));
+                    extractMemories(memoryTranscript, trace);
                     stopTriggered = true;
                     triggerStop(runId, userMessage, step, "completed", null, trace);
                     return new RunResult(
@@ -249,6 +304,7 @@ public final class AgentLoop {
                     item.put("role", "tool");
                     item.put("tool_call_id", call.callId());
                     item.put("content", output);
+                    memoryTranscript.add(item.deepCopy());
                 }
 
                 if (nagRequired) {
@@ -280,6 +336,41 @@ public final class AgentLoop {
             }
             throw exception;
         }
+    }
+
+    private ArrayNode requestMessages(
+            ArrayNode compactedMessages,
+            MemorySystem.LoadedMemories loadedMemories
+    ) {
+        if (memorySystem == null) return compactedMessages;
+        return memorySystem.injectAfterCompaction(
+                compactedMessages,
+                loadedMemories
+        );
+    }
+
+    private void extractMemories(
+            ArrayNode memoryTranscript,
+            List<Map<String, Object>> trace
+    ) {
+        if (memorySystem == null) return;
+        MemorySystem.ExtractionResult result =
+                memorySystem.extractAndConsolidate(memoryTranscript);
+        if (result.error() != null) {
+            trace.add(event(
+                    "memory",
+                    "Memory · Extraction partially completed",
+                    "新增=" + result.extracted()
+                            + "，整理=false，错误=" + result.error()
+            ));
+            return;
+        }
+        trace.add(event(
+                "memory",
+                "Memory · End-of-turn Extraction",
+                "新增=" + result.extracted()
+                        + "，整理=" + result.consolidated()
+        ));
     }
 
     private void compactBeforeModel(
