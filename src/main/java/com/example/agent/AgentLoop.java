@@ -1,5 +1,6 @@
 package com.example.agent;
 
+import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -17,21 +18,28 @@ import java.util.Map;
  * s01 的全部核心：模型 -> 工具 -> 模型，直到模型返回最终文本。
  */
 public final class AgentLoop {
-    private static final int MAX_STEPS = 5;
-
     private static final String INSTRUCTIONS = """
-            你是一个简洁、可靠的中文助手。
-            当用户询问当前日期或时间时，调用 get_current_time 工具。
-            工具返回结果后，根据结果回答，不要编造时间。
-            已有足够信息时直接给出最终答案。
+            你是一个项目代码回答助手
+            
+            回答代码问题前，先使用工具检查项目中的真实代码。
+            使用list_files 了解结构。
+            使用search_code 定位类、方法和关键词
+            使用read_file 阅读相关实现
+            
+            不要根据猜测描述项目代码。
+            回答时尽量废除为念路径和行号。
+            当前工具都是只读工具，不要声称已经修改文件
+            已有足够证据时，直接给出清晰的中文回答。
             """;
 
     private final DeepSeekClient model;
+    private final ToolRegistry tools;
     private final ObjectMapper json;
 
-    public AgentLoop(DeepSeekClient model, ObjectMapper json) {
-        this.model = model;
-        this.json = json;
+    public AgentLoop( DeepSeekClient model,ToolRegistry tools,ObjectMapper json){
+       this.model = model;
+       this.tools = tools;
+       this.json = json;
     }
 
     public RunResult run(String userMessage) throws Exception {
@@ -46,11 +54,16 @@ public final class AgentLoop {
         int toolCalls = 0;
         List<Map<String, Object>> trace = new ArrayList<>();
 
-        for (int step = 1; step <= MAX_STEPS; step++) {
+        int step = 0;
+        while (true) {
+            step++;
             trace.add(event("model", "模型调用 · Step " + step, "模型正在判断下一步"));
 
             DeepSeekClient.ModelResponse response =
-                    model.createResponse(messages);
+                    model.createResponse(
+                            messages,
+                            tools.definitions()
+                    );
             messages.add(response.assistantMessage());
 
             if (response.toolCalls().isEmpty()) {
@@ -71,7 +84,10 @@ public final class AgentLoop {
                 toolCalls++;
                 trace.add(event("tool", "工具 · " + call.name(), call.arguments().toString()));
 
-                String output = executeTool(call);
+                String output = tools.execute(
+                        call.name(),
+                        call.arguments()
+                );
                 trace.add(event("done", "工具完成 · " + call.name(), output));
 
                 ObjectNode item = messages.addObject();
@@ -80,31 +96,8 @@ public final class AgentLoop {
                 item.put("content", output);
             }
         }
-
-        throw new IllegalStateException("Agent 超过最大步数，已安全停止");
     }
 
-    private String executeTool(DeepSeekClient.ToolCall call) throws Exception {
-        if (!"get_current_time".equals(call.name())) {
-            throw new IllegalArgumentException("未知工具：" + call.name());
-        }
-
-        String timeZone = call.arguments().path("timeZone").asText("Asia/Shanghai");
-        ZoneId zoneId;
-        try {
-            zoneId = ZoneId.of(timeZone);
-        } catch (Exception exception) {
-            throw new IllegalArgumentException("无效时区：" + timeZone);
-        }
-
-        ObjectNode result = json.createObjectNode();
-        result.put("timeZone", timeZone);
-        result.put(
-                "value",
-                ZonedDateTime.now(zoneId).format(DateTimeFormatter.ISO_ZONED_DATE_TIME)
-        );
-        return json.writeValueAsString(result);
-    }
 
     private Map<String, Object> event(String kind, String title, String detail) {
         Map<String, Object> value = new LinkedHashMap<>();

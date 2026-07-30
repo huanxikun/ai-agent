@@ -33,7 +33,10 @@ public final class DeepSeekClient {
                 .build();
     }
 
-    public ModelResponse createResponse(ArrayNode messages) throws Exception {
+    public ModelResponse createResponse(
+            ArrayNode messages,
+            ArrayNode tools
+    ) throws Exception {
         if (apiKey.isBlank()) {
             throw new IllegalStateException("请先在 .env 中配置 DEEPSEEK_API_KEY");
         }
@@ -41,7 +44,7 @@ public final class DeepSeekClient {
         ObjectNode body = json.createObjectNode();
         body.put("model", model);
         body.set("messages", messages);
-        body.set("tools", toolDefinitions());
+        body.set("tools", tools);
         body.put("tool_choice", "auto");
         body.putObject("thinking").put("type", "disabled");
 
@@ -66,27 +69,6 @@ public final class DeepSeekClient {
         }
 
         return parseResponse(payload);
-    }
-
-    private ArrayNode toolDefinitions() {
-        ArrayNode tools = json.createArrayNode();
-        ObjectNode function = tools.addObject()
-                .put("type", "function")
-                .putObject("function");
-        function.put("name", "get_current_time");
-        function.put(
-                "description",
-                "获取指定 IANA 时区的当前日期和时间。返回 timeZone 和 ISO-8601 格式的 value；时区无效时返回错误。"
-        );
-
-        ObjectNode parameters = function.putObject("parameters");
-        parameters.put("type", "object");
-        ObjectNode timeZone = parameters.putObject("properties").putObject("timeZone");
-        timeZone.put("type", "string");
-        timeZone.put("description", "IANA 时区，例如 Asia/Shanghai");
-        parameters.putArray("required").add("timeZone");
-        parameters.put("additionalProperties", false);
-        return tools;
     }
 
     private ModelResponse parseResponse(JsonNode payload) throws Exception {

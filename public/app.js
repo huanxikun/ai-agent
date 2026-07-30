@@ -10,7 +10,6 @@ const elements = {
   traceSummary: document.querySelector("#traceSummary"),
   stepCount: document.querySelector("#stepCount"),
   toolCount: document.querySelector("#toolCount"),
-  duration: document.querySelector("#duration"),
   reset: document.querySelector("#resetButton")
 };
 
@@ -20,9 +19,6 @@ initialize();
 
 async function initialize() {
   autoResize();
-  document.querySelectorAll("[data-prompt]").forEach((button) => {
-    button.addEventListener("click", () => submitMessage(button.dataset.prompt));
-  });
   elements.form.addEventListener("submit", (event) => {
     event.preventDefault();
     submitMessage(elements.input.value);
@@ -75,7 +71,6 @@ async function submitMessage(rawMessage) {
     }
     elements.stepCount.textContent = data.steps;
     elements.toolCount.textContent = data.toolCalls;
-    elements.duration.textContent = data.durationMs;
     elements.traceSummary.classList.add("visible");
   } catch (error) {
     agentMessage.classList.add("error");

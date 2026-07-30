@@ -1,5 +1,7 @@
 package com.example.agent;
 
+import com.example.agent.tools.CodeTools;
+import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -29,7 +31,18 @@ public final class AgentApplication {
 
         DeepSeekClient modelClient =
                 new DeepSeekClient(apiKey, model, baseUrl, JSON);
-        AgentLoop agentLoop = new AgentLoop(modelClient, JSON);
+        Path projectRoot = Path.of(
+                env.getOrDefault("PROJECT_ROOT", ".")
+        ).toAbsolutePath().normalize();
+
+        ToolRegistry tools = new ToolRegistry(JSON);
+        new CodeTools(projectRoot, JSON).registerInto(tools);
+
+        AgentLoop agentLoop = new AgentLoop(
+                modelClient,
+                tools,
+                JSON
+        );
 
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
 
