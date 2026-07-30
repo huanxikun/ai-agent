@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="支持按需加载 Skill 的代码 Agent" />
-    <title>My Agent · S07 Skill Loading</title>
+    <meta name="description" content="支持分层上下文压缩的代码 Agent" />
+    <title>My Agent · S08 Context Compact</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -14,7 +14,7 @@
           <span class="brand-mark">A</span>
           <span>
             <strong>My Agent</strong>
-            <small>s07 · Skill Loading</small>
+            <small>s08 · Context Compact</small>
           </span>
         </a>
         <div class="status">
@@ -26,9 +26,9 @@
       <main class="workspace">
         <section class="chat-panel">
           <div class="intro" id="intro">
-            <div class="eyebrow">STEP 07 · SKILL LOADING</div>
-            <h1>不同任务<br />加载不同知识</h1>
-            <p>Agent 先分析任务，再按需读取完整 Skill，不提前占用上下文。</p>
+            <div class="eyebrow">STEP 08 · CONTEXT COMPACT</div>
+            <h1>上下文满了<br />分层腾出空间</h1>
+            <p>每轮先执行零 API 压缩，只在仍超阈值时调用模型生成摘要。</p>
           </div>
           <div class="messages" id="messages" aria-live="polite"></div>
           <form class="composer" id="chatForm">

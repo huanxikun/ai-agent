@@ -1,77 +1,95 @@
-# My Agent · S07 Skill Loading
+# My Agent · S08 Context Compact
 
-S07 在受限 Subagent 之上加入按需 Skill Loading。每轮新任务都先构建基础 system prompt，只注入可用 Skill 的名称与简介；模型分析任务后，可以调用 `load_skills` 读取相关 Skill 的完整 `SKILL.md`。
+S08 为父 Agent 与 Subagent 加入分层上下文压缩。原则是先运行便宜、确定性的本地操作，只有本地压缩后仍超过阈值才使用一次模型摘要；API 明确拒绝过长提示时，再执行完全不调用模型的应急裁剪。
 
-## 运行流程
+## 每轮调用顺序
+
+每次调用业务模型之前，无条件按以下顺序执行：
 
 ```text
-收到任务
-  → build system prompt
-  → 注入基础规则 + Skill 名称/简介
-  → 模型分析任务
-  → load_skills（仅在需要时）
-  → 完整 SKILL.md 作为 tool result 回填
-  → 按 Skill 说明继续执行
+L3 toolResultBudget（0 API）
+  → L1 snipCompact（0 API）
+  → L2 microCompact（0 API）
+  → token 阈值检查
+      → 未超限：调用业务模型
+      → 仍超限：L4 autoCompact（1 API）→ 调用业务模型
 ```
 
-系统提示在每次父 Agent 或 Subagent 开始运行时重新构建，因此新增或修改 Skill 后无需重启即可在下一次任务中被发现。完整 Skill 内容不会预加载，以免无关知识占用上下文。
+如果业务 API 返回 HTTP 413、`prompt_too_long`、`prompt too long` 或 context-length 错误：
 
-## Skill 目录
-
-每个 Skill 位于 `skills/<name>/SKILL.md`：
-
-```markdown
----
-name: backend-java
-description: 分析 Java Agent 后端、工具注册、Hooks、权限和模型循环
----
-
-# 完整工作说明
-...
+```text
+reactiveCompact（0 API，UTF-8 字节级裁剪）
+  → 保留应急摘要和最近 5 条消息
+  → 仅重试业务 API 一次
 ```
 
-当前示例：
+## 四层压缩
 
-- `backend-java`：Java 后端、Agent Loop、工具、Hooks 与权限研究
-- `frontend-ui`：原生前端、对话框、Step 面板与局部滚动检查
+### L3 toolResultBudget
 
-Skill 名称只允许小写字母、数字和连字符。单个文件最大 256 KiB，一次最多加载 5 个 Skill；目录穿越、符号链接、未知名称和重复加载请求会被拒绝。
+- 工具结果总量超过 200 KiB 时，优先选择最大的 tool result。
+- 完整内容写入 `.agent-context/tool-results/<run-id>/`。
+- 原 tool 消息不删除，只把正文替换为包含落盘路径、字节数和 SHA-256 的占位文本。
+- 如果仍超过预算，继续选择当前最大的内联结果，直到回到预算内。
 
-## load_skills 工具
+`.agent-context/` 已加入 `.gitignore`，不会进入版本库。
 
-调用：
+### L1 snipCompact
 
-```json
-{
-  "skills": ["backend-java"]
-}
+- 消息超过 50 条时裁掉中间部分。
+- 严格保留最前 3 条和最后 47 条。
+- 裁剪后会处理断开的 tool-call 关联，避免向 API 发送孤立的工具结果。
+
+### L2 microCompact
+
+- 将距离当前超过 10 条的旧 tool result 正文替换为轻量占位符。
+- 保留消息本身、`tool_call_id` 和原始字节数，不删除整条消息。
+- 已由 L3 落盘的指针不会被覆盖。
+
+### L4 autoCompact
+
+- 使用 UTF-8 请求字节数除以 3 估算 token。
+- 默认阈值为 24,000，可通过环境变量调整：
+
+```dotenv
+CONTEXT_TOKEN_THRESHOLD=24000
 ```
 
-返回：
+- L3、L1、L2 后仍超过阈值才调用一次摘要 API。
+- 摘要覆盖压缩后的完整上下文，要求保留目标、事实、路径、工具结果、待办、约束、审批和错误。
+- 摘要完成后保留基础 system prompt、全量摘要与最近 5 条消息。
 
-```json
-{
-  "status": "loaded",
-  "skills": [
-    {
-      "name": "backend-java",
-      "description": "Skill 简介",
-      "path": "backend-java/SKILL.md",
-      "content": "完整 SKILL.md 内容"
-    }
-  ]
-}
-```
+## reactiveCompact
 
-`load_skills` 注册在 `ToolHandlers` 中，父 Agent 和 Subagent 均可使用，并统一经过 `PreToolUse` / `PostToolUse` hooks。Subagent 仍然只拥有代码读取工具与 Skill Loading，不能写文件、更新父 Todo 或递归调用 `task`。
+应急压缩不调用 LLM：
+
+- 从原上下文前 5 条构造确定性的应急摘要。
+- 保留最近 5 条消息。
+- 每条最近消息按 UTF-8 字节裁到 8 KiB。
+- 移除可能断裂的 tool-call 元数据，并把孤立工具结果转换为安全的 system 文本。
+- 压缩后仅重试 API 一次，避免无限重试。
+
+## Harness 轨迹
+
+父 Agent 每次模型调用前都会产生 `Context Compact` 轨迹，显示：
+
+- L3 落盘工具结果数
+- L1 删除消息数
+- L2 压缩旧工具结果数
+- 是否触发 L4 或 reactiveCompact
+- 压缩前后估算 token
+- 压缩后的消息数
+
+Subagent 发生实际压缩时也会输出终端记录。
 
 ## 保留能力
 
 - S03：文件创建、修改、删除与三道权限闸门
-- S04：UserPromptScript、PreToolUse、PostToolUse、Stop hooks
-- S05：进程内 TodoWrite 与连续三轮 Nag Reminder
-- S06：上下文隔离、只读、不可递归的 Subagent
-- S07：system prompt 动态构建与按需完整 Skill 加载
+- S04：完整 Agent Cycle Hooks
+- S05：进程内 TodoWrite 与三轮 Nag Reminder
+- S06：只读、不可递归 Subagent
+- S07：按需加载完整 Skill
+- S08：L3→L1→L2→L4 上下文压缩与 reactiveCompact
 
 ## 启动与验证
 

@@ -1,6 +1,7 @@
 package com.example.agent.subagents;
 
 import com.example.agent.DeepSeekClient;
+import com.example.agent.context.ContextCompactor;
 import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
@@ -246,6 +247,99 @@ class SubagentTest {
         assertEquals(2, result.steps());
         assertEquals(1, result.toolCalls());
         assertTrue(result.text().contains("后端 Skill"));
+    }
+
+    @Test
+    void childReactivelyCompactsAndRetriesOnceOnHttp413()
+            throws Exception {
+        HookRegistry hooks = configuredHooks();
+        ToolRegistry childTools = readOnlyTools(hooks);
+        ContextCompactor compactor = new ContextCompactor(
+                projectRoot,
+                1_000_000,
+                messages -> "unused",
+                JSON
+        );
+        AtomicInteger calls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions) -> {
+                    if (calls.getAndIncrement() == 0) {
+                        throw new DeepSeekClient.DeepSeekException(
+                                413,
+                                "",
+                                "payload too large"
+                        );
+                    }
+                    assertTrue(messages.size() <= 7);
+                    assertTrue(
+                            messages.path(0).path("content").asText()
+                                    .contains("reactiveCompact")
+                    );
+                    return finalResponse("应急压缩后完成。");
+                },
+                childTools,
+                hooks,
+                null,
+                compactor,
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "应急压缩",
+                "处理过长上下文",
+                "parent"
+        );
+
+        assertEquals(2, calls.get());
+        assertEquals(1, result.steps());
+        assertTrue(result.text().contains("应急压缩"));
+    }
+
+    @Test
+    void childFallsBackToReactiveWhenL4SummaryGetsHttp413()
+            throws Exception {
+        HookRegistry hooks = configuredHooks();
+        ToolRegistry childTools = readOnlyTools(hooks);
+        AtomicInteger summaries = new AtomicInteger();
+        ContextCompactor compactor = new ContextCompactor(
+                projectRoot,
+                1,
+                messages -> {
+                    summaries.incrementAndGet();
+                    throw new DeepSeekClient.DeepSeekException(
+                            413,
+                            "",
+                            "summary payload too large"
+                    );
+                },
+                JSON
+        );
+        AtomicInteger modelCalls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions) -> {
+                    modelCalls.incrementAndGet();
+                    assertTrue(
+                            messages.path(0).path("content").asText()
+                                    .contains("reactiveCompact")
+                    );
+                    return finalResponse("L4 失败后仍可继续。");
+                },
+                childTools,
+                hooks,
+                null,
+                compactor,
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "L4 应急",
+                "总结请求过长",
+                "parent"
+        );
+
+        assertEquals(1, summaries.get());
+        assertEquals(1, modelCalls.get());
+        assertTrue(result.text().contains("仍可继续"));
     }
 
     private HookRegistry configuredHooks() throws Exception {

@@ -1,5 +1,6 @@
 package com.example.agent;
 
+import com.example.agent.context.ContextCompactor;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
 import com.example.agent.hooks.DefaultAgentHooks;
@@ -53,6 +54,17 @@ public final class AgentApplication {
         PermissionHooks.register_hooks(hooks, permissions);
         TodoStore todoStore = new TodoStore();
         SkillCatalog skillCatalog = new SkillCatalog(projectRoot);
+        int contextTokenThreshold = parsePositiveInt(
+                env.get("CONTEXT_TOKEN_THRESHOLD"),
+                ContextCompactor.DEFAULT_TOKEN_THRESHOLD,
+                "CONTEXT_TOKEN_THRESHOLD"
+        );
+        ContextCompactor contextCompactor = new ContextCompactor(
+                projectRoot,
+                contextTokenThreshold,
+                modelClient::summarize,
+                JSON
+        );
 
         CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
         ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
@@ -64,6 +76,7 @@ public final class AgentApplication {
                 subagentTools,
                 hooks,
                 skillCatalog,
+                contextCompactor,
                 JSON
         );
 
@@ -78,6 +91,7 @@ public final class AgentApplication {
                 hooks,
                 todoStore,
                 skillCatalog,
+                contextCompactor,
                 JSON
         );
 
@@ -92,7 +106,13 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s07-skill-loading",
+                    "stage", "s08-context-compact",
+                    "contextCompact", Map.of(
+                            "enabled", true,
+                            "tokenThreshold", contextTokenThreshold,
+                            "order", "L3->L1->L2->L4",
+                            "reactiveFallback", true
+                    ),
                     "skills", Map.of(
                             "available", skillCatalog.discover().size(),
                             "onDemand", true
@@ -244,5 +264,22 @@ public final class AgentApplication {
             values.putIfAbsent(key, value);
         }
         return values;
+    }
+
+    private static int parsePositiveInt(
+            String rawValue,
+            int defaultValue,
+            String name
+    ) {
+        if (rawValue == null || rawValue.isBlank()) return defaultValue;
+        try {
+            int value = Integer.parseInt(rawValue.trim());
+            if (value < 1) throw new NumberFormatException();
+            return value;
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException(
+                    name + " 必须是大于 0 的整数"
+            );
+        }
     }
 }

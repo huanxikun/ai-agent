@@ -1,5 +1,6 @@
 package com.example.agent;
 
+import com.example.agent.context.ContextCompactor;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
@@ -19,7 +20,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S07 Agent Cycle：每次先构建 system prompt，再按需加载完整 Skill。
+ * S08 Agent Cycle：每次构建 system 并按需加载 Skill，同时分层压缩上下文。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -49,6 +50,7 @@ public final class AgentLoop {
     private final HookRegistry hooks;
     private final TodoStore todoStore;
     private final SkillCatalog skillCatalog;
+    private final ContextCompactor contextCompactor;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -58,7 +60,7 @@ public final class AgentLoop {
             TodoStore todoStore,
             ObjectMapper json
     ) {
-        this(model, tools, hooks, todoStore, null, json);
+        this(model, tools, hooks, todoStore, null, null, json);
     }
 
     public AgentLoop(
@@ -69,11 +71,24 @@ public final class AgentLoop {
             SkillCatalog skillCatalog,
             ObjectMapper json
     ) {
+        this(model, tools, hooks, todoStore, skillCatalog, null, json);
+    }
+
+    public AgentLoop(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            TodoStore todoStore,
+            SkillCatalog skillCatalog,
+            ContextCompactor contextCompactor,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.todoStore = todoStore;
         this.skillCatalog = skillCatalog;
+        this.contextCompactor = contextCompactor;
         this.json = json;
     }
 
@@ -121,13 +136,32 @@ public final class AgentLoop {
 
             for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
+                compactBeforeModel(messages, runId, step, trace);
                 trace.add(event("model", "模型调用 · Step " + step, "模型正在判断下一步"));
 
-                DeepSeekClient.ModelResponse response =
-                        model.createResponse(
-                                messages,
-                                tools.definitions()
-                        );
+                DeepSeekClient.ModelResponse response;
+                try {
+                    response = model.createResponse(
+                            messages,
+                            tools.definitions()
+                    );
+                } catch (Exception exception) {
+                    if (contextCompactor == null
+                            || !DeepSeekClient.isPromptTooLong(exception)) {
+                        throw exception;
+                    }
+                    ContextCompactor.CompactReport reactive =
+                            contextCompactor.reactiveCompact(messages);
+                    trace.add(compactEvent(
+                            "reactiveCompact",
+                            step,
+                            reactive
+                    ));
+                    response = model.createResponse(
+                            messages,
+                            tools.definitions()
+                    );
+                }
                 messages.add(response.assistantMessage());
                 boolean calledTodoWrite = response.toolCalls().stream()
                         .anyMatch(call -> "todo_write".equals(call.name()));
@@ -246,6 +280,49 @@ public final class AgentLoop {
             }
             throw exception;
         }
+    }
+
+    private void compactBeforeModel(
+            ArrayNode messages,
+            String runId,
+            int step,
+            List<Map<String, Object>> trace
+    ) throws Exception {
+        if (contextCompactor == null) return;
+        try {
+            ContextCompactor.CompactReport report =
+                    contextCompactor.compactBeforeModel(messages, runId);
+            trace.add(compactEvent("L3→L1→L2→L4", step, report));
+        } catch (Exception exception) {
+            if (!DeepSeekClient.isPromptTooLong(exception)) throw exception;
+            ContextCompactor.CompactReport reactive =
+                    contextCompactor.reactiveCompact(messages);
+            trace.add(compactEvent(
+                    "L4 failed → reactiveCompact",
+                    step,
+                    reactive
+            ));
+        }
+    }
+
+    private Map<String, Object> compactEvent(
+            String stage,
+            int step,
+            ContextCompactor.CompactReport report
+    ) {
+        return event(
+                "compact",
+                "Context Compact · " + stage + " · Step " + step,
+                "L3落盘=" + report.offloadedToolResults()
+                        + "，L1删消息=" + report.removedMessages()
+                        + "，L2压工具结果="
+                        + report.microCompactedToolResults()
+                        + "，L4摘要=" + report.autoCompacted()
+                        + "，应急=" + report.reactiveCompacted()
+                        + "，tokens≈" + report.tokensBefore()
+                        + "→" + report.tokensAfter()
+                        + "，消息=" + report.messagesAfter()
+        );
     }
 
     private void injectTodoReminder(

@@ -48,6 +48,40 @@ public final class DeepSeekClient {
         body.put("tool_choice", "auto");
         body.putObject("thinking").put("type", "disabled");
 
+        JsonNode payload = send(body);
+        return parseResponse(payload);
+    }
+
+    public String summarize(ArrayNode messages) throws Exception {
+        if (apiKey.isBlank()) {
+            throw new IllegalStateException("请先在 .env 中配置 DEEPSEEK_API_KEY");
+        }
+
+        ArrayNode summaryMessages = json.createArrayNode();
+        summaryMessages.addObject()
+                .put("role", "system")
+                .put("content", """
+                        你是上下文压缩器。完整总结后续对话，保留：
+                        用户目标、已确认事实、关键路径、工具结果、未完成事项、
+                        约束、审批状态和错误。不要添加新事实，输出紧凑中文摘要。
+                        """);
+        summaryMessages.addAll(messages.deepCopy());
+
+        ObjectNode body = json.createObjectNode();
+        body.put("model", model);
+        body.set("messages", summaryMessages);
+        body.putObject("thinking").put("type", "disabled");
+
+        JsonNode payload = send(body);
+        JsonNode message = payload.path("choices").path(0).path("message");
+        String summary = message.path("content").asText("").trim();
+        if (summary.isEmpty()) {
+            throw new IllegalStateException("DeepSeek 没有返回上下文摘要");
+        }
+        return summary;
+    }
+
+    private JsonNode send(ObjectNode body) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl + "/chat/completions"))
                 .timeout(Duration.ofSeconds(120))
@@ -58,17 +92,51 @@ public final class DeepSeekClient {
 
         HttpResponse<String> response =
                 http.send(request, HttpResponse.BodyHandlers.ofString());
-        JsonNode payload = json.readTree(response.body());
+        JsonNode payload = null;
+        try {
+            payload = json.readTree(response.body());
+        } catch (Exception parseError) {
+            if (response.statusCode() >= 200
+                    && response.statusCode() < 300) {
+                throw parseError;
+            }
+        }
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             String message = payload == null
                     ? "DeepSeek 请求失败：" + response.statusCode()
                     : payload.path("error").path("message").asText(
                             "DeepSeek 请求失败：" + response.statusCode()
                     );
-            throw new IllegalStateException(message);
+            String code = payload == null
+                    ? ""
+                    : payload.path("error").path("code").asText("");
+            throw new DeepSeekException(response.statusCode(), code, message);
         }
+        return payload;
+    }
 
-        return parseResponse(payload);
+    public static boolean isPromptTooLong(Throwable error) {
+        for (Throwable current = error;
+             current != null;
+             current = current.getCause()) {
+            if (current instanceof DeepSeekException deepSeek
+                    && (deepSeek.statusCode() == 413
+                    || "prompt_too_long".equalsIgnoreCase(
+                            deepSeek.code()
+                    ))) {
+                return true;
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase();
+                if (normalized.contains("prompt_too_long")
+                        || normalized.contains("prompt too long")
+                        || normalized.contains("context length")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private ModelResponse parseResponse(JsonNode payload) throws Exception {
@@ -103,5 +171,25 @@ public final class DeepSeekClient {
             List<ToolCall> toolCalls,
             JsonNode assistantMessage
     ) {
+    }
+
+    public static final class DeepSeekException
+            extends IllegalStateException {
+        private final int statusCode;
+        private final String code;
+
+        public DeepSeekException(int statusCode, String code, String message) {
+            super(message);
+            this.statusCode = statusCode;
+            this.code = code;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+
+        public String code() {
+            return code;
+        }
     }
 }

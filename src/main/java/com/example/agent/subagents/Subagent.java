@@ -1,6 +1,7 @@
 package com.example.agent.subagents;
 
 import com.example.agent.DeepSeekClient;
+import com.example.agent.context.ContextCompactor;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
@@ -13,7 +14,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.UUID;
 
 /**
- * 上下文隔离、只读、不可递归派生的 S06 Subagent。
+ * 上下文隔离、只读、不可递归派生，并支持 S08 压缩的 Subagent。
  */
 public final class Subagent implements SubagentExecutor {
     private static final int MAX_STEPS = 6;
@@ -32,6 +33,7 @@ public final class Subagent implements SubagentExecutor {
     private final ToolRegistry tools;
     private final HookRegistry hooks;
     private final SkillCatalog skillCatalog;
+    private final ContextCompactor contextCompactor;
     private final ObjectMapper json;
 
     public Subagent(
@@ -40,7 +42,7 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ObjectMapper json
     ) {
-        this(model::createResponse, tools, hooks, null, json);
+        this(model::createResponse, tools, hooks, null, null, json);
     }
 
     public Subagent(
@@ -50,7 +52,25 @@ public final class Subagent implements SubagentExecutor {
             SkillCatalog skillCatalog,
             ObjectMapper json
     ) {
-        this(model::createResponse, tools, hooks, skillCatalog, json);
+        this(model::createResponse, tools, hooks, skillCatalog, null, json);
+    }
+
+    public Subagent(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            SkillCatalog skillCatalog,
+            ContextCompactor contextCompactor,
+            ObjectMapper json
+    ) {
+        this(
+                model::createResponse,
+                tools,
+                hooks,
+                skillCatalog,
+                contextCompactor,
+                json
+        );
     }
 
     Subagent(
@@ -59,7 +79,7 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ObjectMapper json
     ) {
-        this(model, tools, hooks, null, json);
+        this(model, tools, hooks, null, null, json);
     }
 
     Subagent(
@@ -69,10 +89,22 @@ public final class Subagent implements SubagentExecutor {
             SkillCatalog skillCatalog,
             ObjectMapper json
     ) {
+        this(model, tools, hooks, skillCatalog, null, json);
+    }
+
+    Subagent(
+            ModelCall model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            SkillCatalog skillCatalog,
+            ContextCompactor contextCompactor,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.skillCatalog = skillCatalog;
+        this.contextCompactor = contextCompactor;
         this.json = json;
     }
 
@@ -113,10 +145,55 @@ public final class Subagent implements SubagentExecutor {
 
             for (int step = 1; step <= MAX_STEPS; step++) {
                 lastStep = step;
-                DeepSeekClient.ModelResponse response = model.createResponse(
-                        messages,
-                        tools.definitions()
-                );
+                if (contextCompactor != null) {
+                    try {
+                        ContextCompactor.CompactReport compact =
+                                contextCompactor.compactBeforeModel(
+                                        messages,
+                                        runId
+                                );
+                        if (compact.changed()) {
+                            System.out.printf(
+                                    "[Subagent compact] L3=%d L1=%d L2=%d L4=%s tokens≈%d→%d%n",
+                                    compact.offloadedToolResults(),
+                                    compact.removedMessages(),
+                                    compact.microCompactedToolResults(),
+                                    compact.autoCompacted(),
+                                    compact.tokensBefore(),
+                                    compact.tokensAfter()
+                            );
+                        }
+                    } catch (Exception exception) {
+                        if (!DeepSeekClient.isPromptTooLong(exception)) {
+                            throw exception;
+                        }
+                        contextCompactor.reactiveCompact(messages);
+                        System.out.println(
+                                "[Subagent compact] L4 被拒绝，已执行 reactiveCompact"
+                        );
+                    }
+                }
+
+                DeepSeekClient.ModelResponse response;
+                try {
+                    response = model.createResponse(
+                            messages,
+                            tools.definitions()
+                    );
+                } catch (Exception exception) {
+                    if (contextCompactor == null
+                            || !DeepSeekClient.isPromptTooLong(exception)) {
+                        throw exception;
+                    }
+                    contextCompactor.reactiveCompact(messages);
+                    System.out.println(
+                            "[Subagent compact] reactiveCompact 后重试一次"
+                    );
+                    response = model.createResponse(
+                            messages,
+                            tools.definitions()
+                    );
+                }
                 messages.add(response.assistantMessage());
 
                 if (response.toolCalls().isEmpty()) {
