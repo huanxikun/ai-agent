@@ -289,20 +289,9 @@ public final class AgentLoop {
             List<Map<String, Object>> trace
     ) throws Exception {
         if (contextCompactor == null) return;
-        try {
-            ContextCompactor.CompactReport report =
-                    contextCompactor.compactBeforeModel(messages, runId);
-            trace.add(compactEvent("L3→L1→L2→L4", step, report));
-        } catch (Exception exception) {
-            if (!DeepSeekClient.isPromptTooLong(exception)) throw exception;
-            ContextCompactor.CompactReport reactive =
-                    contextCompactor.reactiveCompact(messages);
-            trace.add(compactEvent(
-                    "L4 failed → reactiveCompact",
-                    step,
-                    reactive
-            ));
-        }
+        ContextCompactor.CompactReport report =
+                contextCompactor.compactBeforeModel(messages, runId);
+        trace.add(compactEvent("L3→L1→L2→L4", step, report));
     }
 
     private Map<String, Object> compactEvent(

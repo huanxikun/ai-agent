@@ -146,30 +146,20 @@ public final class Subagent implements SubagentExecutor {
             for (int step = 1; step <= MAX_STEPS; step++) {
                 lastStep = step;
                 if (contextCompactor != null) {
-                    try {
-                        ContextCompactor.CompactReport compact =
-                                contextCompactor.compactBeforeModel(
-                                        messages,
-                                        runId
-                                );
-                        if (compact.changed()) {
-                            System.out.printf(
-                                    "[Subagent compact] L3=%d L1=%d L2=%d L4=%s tokens≈%d→%d%n",
-                                    compact.offloadedToolResults(),
-                                    compact.removedMessages(),
-                                    compact.microCompactedToolResults(),
-                                    compact.autoCompacted(),
-                                    compact.tokensBefore(),
-                                    compact.tokensAfter()
+                    ContextCompactor.CompactReport compact =
+                            contextCompactor.compactBeforeModel(
+                                    messages,
+                                    runId
                             );
-                        }
-                    } catch (Exception exception) {
-                        if (!DeepSeekClient.isPromptTooLong(exception)) {
-                            throw exception;
-                        }
-                        contextCompactor.reactiveCompact(messages);
-                        System.out.println(
-                                "[Subagent compact] L4 被拒绝，已执行 reactiveCompact"
+                    if (compact.changed()) {
+                        System.out.printf(
+                                "[Subagent compact] L3=%d L1=%d L2=%d L4=%s tokens≈%d→%d%n",
+                                compact.offloadedToolResults(),
+                                compact.removedMessages(),
+                                compact.microCompactedToolResults(),
+                                compact.autoCompacted(),
+                                compact.tokensBefore(),
+                                compact.tokensAfter()
                         );
                     }
                 }

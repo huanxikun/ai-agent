@@ -295,53 +295,6 @@ class SubagentTest {
         assertTrue(result.text().contains("应急压缩"));
     }
 
-    @Test
-    void childFallsBackToReactiveWhenL4SummaryGetsHttp413()
-            throws Exception {
-        HookRegistry hooks = configuredHooks();
-        ToolRegistry childTools = readOnlyTools(hooks);
-        AtomicInteger summaries = new AtomicInteger();
-        ContextCompactor compactor = new ContextCompactor(
-                projectRoot,
-                1,
-                messages -> {
-                    summaries.incrementAndGet();
-                    throw new DeepSeekClient.DeepSeekException(
-                            413,
-                            "",
-                            "summary payload too large"
-                    );
-                },
-                JSON
-        );
-        AtomicInteger modelCalls = new AtomicInteger();
-        Subagent subagent = new Subagent(
-                (messages, definitions) -> {
-                    modelCalls.incrementAndGet();
-                    assertTrue(
-                            messages.path(0).path("content").asText()
-                                    .contains("reactiveCompact")
-                    );
-                    return finalResponse("L4 失败后仍可继续。");
-                },
-                childTools,
-                hooks,
-                null,
-                compactor,
-                JSON
-        );
-
-        SubagentExecutor.SubagentResult result = subagent.run(
-                "L4 应急",
-                "总结请求过长",
-                "parent"
-        );
-
-        assertEquals(1, summaries.get());
-        assertEquals(1, modelCalls.get());
-        assertTrue(result.text().contains("仍可继续"));
-    }
-
     private HookRegistry configuredHooks() throws Exception {
         HookRegistry hooks = new HookRegistry();
         DefaultAgentHooks.register_hooks(hooks);

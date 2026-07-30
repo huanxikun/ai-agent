@@ -15,7 +15,7 @@ L3 toolResultBudget（0 API）
       → 仍超限：L4 autoCompact（1 API）→ 调用业务模型
 ```
 
-如果业务 API 返回 HTTP 413、`prompt_too_long`、`prompt too long` 或 context-length 错误：
+只有正常业务 LLM 调用返回 HTTP 413、`prompt_too_long`、`prompt too long` 或 context-length 错误时：
 
 ```text
 reactiveCompact（0 API，UTF-8 字节级裁剪）
@@ -63,6 +63,8 @@ CONTEXT_TOKEN_THRESHOLD=24000
 
 应急压缩不调用 LLM：
 
+- 只响应业务 LLM 的实际超长错误，不参与调用前阈值判断。
+- L4 摘要调用失败时直接上抛，不会错误触发 reactiveCompact。
 - 从原上下文前 5 条构造确定性的应急摘要。
 - 保留最近 5 条消息。
 - 每条最近消息按 UTF-8 字节裁到 8 KiB。

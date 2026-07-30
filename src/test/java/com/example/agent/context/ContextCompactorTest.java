@@ -167,6 +167,29 @@ class ContextCompactorTest {
     }
 
     @Test
+    void l4PromptTooLongPropagatesWithoutReactiveCompaction() {
+        ArrayNode messages = JSON.createArrayNode();
+        messages.addObject().put("role", "system").put("content", "system");
+        messages.addObject().put("role", "user").put("content", "long task");
+        ContextCompactor compactor = compactor(
+                1,
+                fullContext -> {
+                    throw new DeepSeekClient.DeepSeekException(
+                            413,
+                            "prompt_too_long",
+                            "summary too long"
+                    );
+                }
+        );
+
+        assertThrows(
+                DeepSeekClient.DeepSeekException.class,
+                () -> compactor.compactBeforeModel(messages, "run")
+        );
+        assertFalse(messages.toString().contains("reactiveCompact"));
+    }
+
+    @Test
     void rejectsInvalidThreshold() {
         assertThrows(
                 IllegalArgumentException.class,
