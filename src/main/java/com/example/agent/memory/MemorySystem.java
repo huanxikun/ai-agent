@@ -68,23 +68,24 @@ public final class MemorySystem {
 
     public synchronized String buildSystemPrompt(String baseInstructions)
             throws IOException {
+        String section = promptSection();
+        if (section.isBlank()) return baseInstructions.strip();
+        return baseInstructions.strip() + "\n\n" + section;
+    }
+
+    public synchronized String promptSection() throws IOException {
         String index = readIndex();
-        StringBuilder result = new StringBuilder(baseInstructions.strip());
-        result.append("""
-
-
+        if (index.isBlank()) return "";
+        return """
                 ## Persistent Memory
                 MEMORY.md 索引常驻 system。完整记忆不会预加载；相关记忆会在
                 S08 压缩管线完成后按需注入当前模型请求，不参与上下文压缩。
                 尊重已加载的用户偏好、反馈、项目事实和引用位置。
                 用户明确要求“记住”或表达稳定偏好时，应在最终回答中正确体现。
-                """);
-        if (index.isBlank()) {
-            result.append("\n当前没有持久记忆。");
-        } else {
-            result.append("\n可用记忆索引：\n").append(index);
-        }
-        return result.toString();
+
+                可用记忆索引：
+                %s
+                """.formatted(index);
     }
 
     public synchronized LoadedMemories loadRelevant(String userMessage)

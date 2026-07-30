@@ -106,26 +106,30 @@ public final class SkillCatalog {
 
     public String buildSystemPrompt(String baseInstructions)
             throws IOException {
+        String section = promptSection();
+        if (section.isBlank()) {
+            return baseInstructions.strip()
+                    + "\n\n## Skill Loading\n- 当前没有可用 skill";
+        }
+        return baseInstructions.strip() + "\n\n" + section;
+    }
+
+    public String promptSection() throws IOException {
         List<SkillSummary> available = discover();
-        StringBuilder prompt = new StringBuilder(baseInstructions.strip());
+        if (available.isEmpty()) return "";
+        StringBuilder prompt = new StringBuilder();
         prompt.append("""
-
-
                 ## Skill Loading
                 先根据用户任务进行分析，再决定是否需要专业 skill。
                 不要预加载所有 skill；只在确实相关时调用 load_skills。
                 load_skills 的 tool result 会包含完整 SKILL.md，加载后必须遵循其中说明。
                 可用 skill：
                 """);
-        if (available.isEmpty()) {
-            prompt.append("- 当前没有可用 skill");
-        } else {
-            for (SkillSummary skill : available) {
-                prompt.append("\n- ")
-                        .append(skill.name())
-                        .append(": ")
-                        .append(skill.description());
-            }
+        for (SkillSummary skill : available) {
+            prompt.append("\n- ")
+                    .append(skill.name())
+                    .append(": ")
+                    .append(skill.description());
         }
         return prompt.toString();
     }

@@ -5,7 +5,7 @@ import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.memory.MemorySystem;
-import com.example.agent.skills.SkillCatalog;
+import com.example.agent.prompts.SystemPromptAssembler;
 import com.example.agent.todos.TodoNagReminder;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.ToolRegistry;
@@ -21,38 +21,18 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S09 Agent Cycle：在 S08 压缩之后智能加载持久记忆，并在结束时提取。
+ * S10 Agent Cycle：system prompt 按真实状态分段组装，并复用确定性缓存。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
-
-    private static final String INSTRUCTIONS = """
-            你是一个项目代码助手。
-
-            回答代码问题前，先使用工具检查项目中的真实代码。
-            使用 list_files 了解结构，使用 search_code 定位关键词，使用 read_file 阅读实现。
-            对多步骤任务，先调用 todo_write 建立完整列表；推进任务时持续更新状态。
-            Todo 状态只能是 pending、in_progress 或 completed，同时最多一个 in_progress。
-            当代码研究任务过大、可以独立拆分时，使用 task 委派给只读 Subagent。
-            task 必须是单一、具体的研究任务；不要把简单问题或文件修改委派给 Subagent。
-            用户明确要求创建文件时使用 create_file，修改现有文件时使用 edit_file，
-            明确要求删除文件时使用 delete_file。
-
-            create_file、edit_file 和 delete_file 只会创建人工审批请求，不会立即更改磁盘。
-            工具返回 approval_required 后，不要重复调用同一个变更工具；告知用户在界面批准或拒绝。
-            不要根据猜测描述项目代码。
-            回答时尽量附上文件路径和行号。
-            未收到工具执行成功的结果时，不要声称文件已经修改或删除。
-            已有足够证据时，直接给出清晰的中文回答。
-            """;
 
     private final DeepSeekClient model;
     private final ToolRegistry tools;
     private final HookRegistry hooks;
     private final TodoStore todoStore;
-    private final SkillCatalog skillCatalog;
     private final ContextCompactor contextCompactor;
     private final MemorySystem memorySystem;
+    private final SystemPromptAssembler systemPromptAssembler;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -60,69 +40,18 @@ public final class AgentLoop {
             ToolRegistry tools,
             HookRegistry hooks,
             TodoStore todoStore,
-            ObjectMapper json
-    ) {
-        this(model, tools, hooks, todoStore, null, null, null, json);
-    }
-
-    public AgentLoop(
-            DeepSeekClient model,
-            ToolRegistry tools,
-            HookRegistry hooks,
-            TodoStore todoStore,
-            SkillCatalog skillCatalog,
-            ObjectMapper json
-    ) {
-        this(
-                model,
-                tools,
-                hooks,
-                todoStore,
-                skillCatalog,
-                null,
-                null,
-                json
-        );
-    }
-
-    public AgentLoop(
-            DeepSeekClient model,
-            ToolRegistry tools,
-            HookRegistry hooks,
-            TodoStore todoStore,
-            SkillCatalog skillCatalog,
-            ContextCompactor contextCompactor,
-            ObjectMapper json
-    ) {
-        this(
-                model,
-                tools,
-                hooks,
-                todoStore,
-                skillCatalog,
-                contextCompactor,
-                null,
-                json
-        );
-    }
-
-    public AgentLoop(
-            DeepSeekClient model,
-            ToolRegistry tools,
-            HookRegistry hooks,
-            TodoStore todoStore,
-            SkillCatalog skillCatalog,
             ContextCompactor contextCompactor,
             MemorySystem memorySystem,
+            SystemPromptAssembler systemPromptAssembler,
             ObjectMapper json
     ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.todoStore = todoStore;
-        this.skillCatalog = skillCatalog;
         this.contextCompactor = contextCompactor;
         this.memorySystem = memorySystem;
+        this.systemPromptAssembler = systemPromptAssembler;
         this.json = json;
     }
 
@@ -139,22 +68,24 @@ public final class AgentLoop {
         List<JsonNode> approvals = new ArrayList<>();
 
         try {
-            String systemPrompt = skillCatalog == null
-                    ? INSTRUCTIONS
-                    : skillCatalog.buildSystemPrompt(INSTRUCTIONS);
-            if (memorySystem != null) {
-                systemPrompt = memorySystem.buildSystemPrompt(systemPrompt);
-            }
+            SystemPromptAssembler.PromptContent initialContent =
+                    requirePromptAssembler().update_content();
+            String systemPrompt = systemPromptAssembler.get_system_prompt(
+                    initialContent
+            );
             ArrayNode messages = json.createArrayNode();
             messages.addObject()
                     .put("role", "system")
                     .put("content", systemPrompt);
             trace.add(event(
                     "system",
-                    "Build System · Skill Catalog",
-                    skillCatalog == null
-                            ? "已注入基础 system prompt"
-                            : "已注入基础 system prompt 与可用 Skill 摘要"
+                    "Build System · Runtime Assembly",
+                    "sections="
+                            + systemPromptAssembler.loadedSections(
+                                    initialContent
+                            )
+                            + "，cache="
+                            + systemPromptAssembler.cacheStats()
             ));
 
             MemorySystem.LoadedMemories loadedMemories =
@@ -189,6 +120,7 @@ public final class AgentLoop {
 
             for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
+                refreshSystemPrompt(messages, step, trace);
                 compactBeforeModel(messages, runId, step, trace);
                 trace.add(event("model", "模型调用 · Step " + step, "模型正在判断下一步"));
 
@@ -336,6 +268,35 @@ public final class AgentLoop {
             }
             throw exception;
         }
+    }
+
+    private SystemPromptAssembler requirePromptAssembler() {
+        if (systemPromptAssembler == null) {
+            throw new IllegalStateException(
+                    "S10 SystemPromptAssembler 未配置"
+            );
+        }
+        return systemPromptAssembler;
+    }
+
+    private void refreshSystemPrompt(
+            ArrayNode messages,
+            int step,
+            List<Map<String, Object>> trace
+    ) throws Exception {
+        SystemPromptAssembler.PromptContent content =
+                requirePromptAssembler().update_content();
+        String prompt = systemPromptAssembler.get_system_prompt(content);
+        if (!messages.isEmpty()
+                && messages.get(0) instanceof ObjectNode systemMessage) {
+            systemMessage.put("content", prompt);
+        }
+        trace.add(event(
+                "system",
+                "System Prompt · Step " + step,
+                "sections=" + systemPromptAssembler.loadedSections(content)
+                        + "，cache=" + systemPromptAssembler.cacheStats()
+        ));
     }
 
     private ArrayNode requestMessages(

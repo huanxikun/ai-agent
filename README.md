@@ -1,138 +1,129 @@
-# My Agent · S09 Memory
+# My Agent · S10 System Prompt
 
-S09 在 S08 Context Compact 之上增加一层不参与压缩的持久 Memory。压缩摘要负责当前任务连续性，Memory 负责跨压缩、跨会话仍不能丢失的用户偏好、反馈、项目事实和引用位置。
+S10 将父 Agent 和 Subagent 的整块硬编码 system prompt 替换为运行时组装：独立 Section 根据真实状态按需拼接，相同状态命中确定性缓存，工具、Skill 或 Memory 发生变化时自动生成新的 prompt。
 
-实现参考：`D:\vsCode\learn\learn-claude-code\s09_memory\README.md`。
+实现参考：`D:\vsCode\learn\learn-claude-code\s10_system_prompt\README.md`。
 
-## 存储结构
+## 三个核心方法
 
-```text
-.memory/
-  MEMORY.md
-  user-preference-tabs.md
-  project-auth-background.md
-  reference-pipeline-location.md
-```
+实现位于 `SystemPromptAssembler`：
 
-每条记忆使用 Markdown 和 YAML frontmatter：
+### `update_content`
 
-```markdown
----
-name: user-preference-tabs
-description: 用户要求使用 tab 缩进
-type: user
----
+从真实运行状态生成不可变的 `PromptContent`：
 
-必须使用 tab 缩进，不能使用空格。
-**How to apply:** 编辑代码时始终使用制表符。
-```
+- 当前 Agent 角色：Parent 或 Subagent
+- 规范化工作目录
+- `ToolRegistry` 中实际注册的工具名称
+- 当前可发现的 Skill 名称和描述
+- 当前 `.memory/MEMORY.md` 索引
+- Context Compact 是否启用
 
-支持四种类型：
+它不会扫描用户消息关键词来猜测能力。例如只有真正注册了 `task`，才会加入委派 Section；只有 Memory 索引真实存在且非空，才会加入 Memory Section。
 
-- `user`：稳定用户偏好
-- `feedback`：长期工作方式与反馈
-- `project`：跨会话仍有用的项目背景
-- `reference`：常用入口、文件和外部位置
+### `assemble_system_prompt`
 
-`.memory/` 已加入 `.gitignore`。它保存在本地项目中并跨服务重启存在，但不会被提交到 Git。
-
-## Index 常驻 System
-
-`MEMORY.md` 每条记忆只保留一行名称、链接和描述：
-
-```markdown
-- [user-preference-tabs](user-preference-tabs.md) — 用户要求使用 tab 缩进
-```
-
-每次用户请求开始时，Memory 索引会参与 system prompt 构建。完整正文不会预加载，因此索引可以保持轻量并减少无关上下文占用。
-
-索引限制：
-
-- 最多 200 行
-- 最大 25 KiB
-- 最多扫描 200 个记忆文件
-
-## 压缩之后智能 Loading
-
-加载顺序：
+按照稳定顺序选择并拼接 Section：
 
 ```text
-Build System
-  → 注入 MEMORY.md 索引
-  → 轻量 side-query 根据当前请求选择相关记忆
-  → 执行 S08：L3 → L1 → L2 → 可选 L4
-  → 将选中的完整记忆注入模型请求副本
-  → 调用业务 LLM
+identity
+workspace
+available_tools
+evidence（存在代码读取工具时）
+planning（存在 todo_write 时）
+delegation（存在 task 时）
+file_mutations（存在文件变更工具时）
+skills（存在 load_skills 且有 Skill 时）
+memory（MEMORY.md 非空时）
+context_compact（压缩启用时）
 ```
 
-关键点：
+Section 使用空行分隔，彼此独立维护。工具列表来自实际注册表，不在 prompt 中维护第二份容易过期的静态清单。
 
-- 每个用户请求只选择一次相关记忆，最多 5 条。
-- side-query 只看到当前请求和 `name + description` 目录。
-- side-query 失败或返回无效 JSON 时，自动降级到名称与描述关键词匹配。
-- 单条加载预算 12 KiB，单请求总预算 60 KiB。
-- Memory 内容注入深拷贝后的请求，不修改 Agent 的标准消息历史。
-- 因此 Memory 正文不会被 L1/L2/L4 再次裁剪或摘要。
-- reactiveCompact 后重试业务 LLM 时，会重新把同一批记忆注入裁剪后的请求副本。
+Parent 与 Subagent 共用组装机制，但 identity 和真实工具集不同：
 
-## 每轮结束提取
+- Parent 可以按注册状态获得 Todo、委派和文件审批说明。
+- Subagent 只会看到其只读工具、Skill Loading 和不可递归身份。
 
-业务模型返回最终文本、没有继续调用工具时，Memory 提取器从独立的未压缩转录中寻找新信息。
+### `get_system_prompt`
 
-提取器只保存：
+使用 `PromptContent` 的确定性 JSON 序列化作为缓存键：
 
-- 明确或稳定的用户偏好
-- 反复出现的反馈和约束
-- 跨会话仍有价值的项目事实
-- 文件、系统或外部问题的长期引用位置
+- Context 相同：直接返回缓存字符串。
+- 工具注册变化：新键，重新组装。
+- Skill 名称或描述变化：新键，重新组装。
+- `MEMORY.md` 内容变化：新键，重新组装。
+- 最多保留 64 个最近使用的 prompt。
 
-不会保存临时进度、工具噪声、猜测、密钥或已存在的重复内容。提取失败不会让正常 Agent 回答失败，Harness 轨迹会记录跳过原因。
+缓存只避免进程内重复拼接，不冒充模型服务的 API prompt cache。Section 顺序保持稳定，也为后续 API 级缓存边界保留条件。
 
-未压缩转录与模型上下文分离：S08 可以修改或删除标准消息，而提取器仍能看到原始用户文字和原始工具结果。工具结果进入提取 prompt 前会受到单条预算限制，但本轮原始信息不会先经过 S08 摘要。
+## Agent Loop
 
-## Memory 整理
-
-新增记忆后，如果文件数达到 10 条，会触发一次低频整理：
-
-- 合并重复内容
-- 处理明确过时或矛盾的记录
-- 优先保留精确用户偏好
-- 最多保留 30 条整理结果
-- 先在临时目录生成完整结果，再替换正式 Memory 文件
-
-整理结果会重建 `MEMORY.md` 索引。
-
-## 与 S08 的关系
+每个新用户请求先运行一次：
 
 ```text
-Session context
-  ├─ S08 Context Compact
-  │    当前目标、近期工具结果、剩余工作
-  │
-  └─ S09 Persistent Memory
-       用户偏好、长期反馈、项目背景、引用位置
-       文件完整保存，不参与 Context Compact
+update_content
+  → get_system_prompt
+  → 创建首条 system 消息
 ```
 
-S08 的 `reactiveCompact` 规则保持不变：只有业务 LLM 实际返回 `prompt_too_long` 或对应 413 时才触发，并且只重试一次。
+每个工具轮次进入下一次业务模型调用前会再次运行：
 
-## Harness 轨迹与健康接口
+```text
+update_content
+  → get_system_prompt
+      → 状态不变：cache hit
+      → 状态变化：assemble_system_prompt
+  → 更新首条 system 消息
+  → S08 Context Compact
+  → S09 Memory 压缩后注入
+  → 业务 LLM
+```
 
-Harness 新增两类轨迹：
+因此同一轮中的多数模型调用只做轻量状态读取并命中缓存；如果工具、Skill 或 Memory 索引真的变化，下一次调用立即获得新 prompt。
 
-- `Memory · Intelligent Loading`：加载数量、字节数和压缩后注入说明
-- `Memory · End-of-turn Extraction`：新增数量和是否执行整理
+## 分段内容
 
-健康接口包含：
+### 始终加载
+
+- `identity`：角色、证据原则、回答边界
+- `workspace`：实际项目根目录
+- `available_tools`：实际注册工具
+
+### 按真实状态加载
+
+- `evidence`
+- `planning`
+- `delegation`
+- `file_mutations`
+- `skills`
+- `memory`
+- `context_compact`
+
+没有 Memory 时，不会加入“当前没有 Memory”的空 Section；没有 Skill 或 `load_skills` 未注册时，也不会加入 Skill Section。
+
+## Harness 可见性
+
+运行轨迹包含：
+
+- 初次 `Build System · Runtime Assembly`
+- 每个模型步骤的 `System Prompt · Step N`
+- 当前加载的 Section 列表
+- 缓存 hit、miss 和 entry 数量
+
+健康接口：
 
 ```json
 {
-  "stage": "s09-memory",
-  "memory": {
-    "enabled": true,
-    "count": 0,
-    "intelligentLoading": true,
-    "injectedAfterCompaction": true
+  "stage": "s10-system-prompt",
+  "systemPrompt": {
+    "runtimeAssembly": true,
+    "conditionalSections": true,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "entries": 0
+    }
   }
 }
 ```
@@ -145,7 +136,8 @@ Harness 新增两类轨迹：
 - S06：只读、不可递归 Subagent
 - S07：按需加载完整 Skill
 - S08：分层上下文压缩与业务 LLM 超长应急处理
-- S09：文件仓库、索引、智能加载、提取与整理
+- S09：持久 Memory 的索引、智能加载、提取和整理
+- S10：System Prompt 分段、按需拼接和确定性缓存
 
 ## 启动与验证
 

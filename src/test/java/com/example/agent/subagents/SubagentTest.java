@@ -9,6 +9,7 @@ import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
+import com.example.agent.prompts.SystemPromptAssembler;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
@@ -99,6 +100,8 @@ class SubagentTest {
                 },
                 childTools,
                 hooks,
+                null,
+                runtimePrompt(childTools, null),
                 JSON
         );
 
@@ -129,6 +132,8 @@ class SubagentTest {
                 ),
                 childTools,
                 hooks,
+                null,
+                runtimePrompt(childTools, null),
                 JSON
         );
 
@@ -234,7 +239,8 @@ class SubagentTest {
                 },
                 childTools,
                 hooks,
-                catalog,
+                null,
+                runtimePrompt(childTools, catalog),
                 JSON
         );
 
@@ -279,8 +285,8 @@ class SubagentTest {
                 },
                 childTools,
                 hooks,
-                null,
                 compactor,
+                runtimePrompt(childTools, null),
                 JSON
         );
 
@@ -314,6 +320,21 @@ class SubagentTest {
                 JSON
         ).registerReadOnlyInto(tools);
         return tools;
+    }
+
+    private SystemPromptAssembler runtimePrompt(
+            ToolRegistry tools,
+            SkillCatalog catalog
+    ) {
+        return new SystemPromptAssembler(
+                projectRoot,
+                tools,
+                catalog,
+                null,
+                true,
+                SystemPromptAssembler.AgentRole.SUBAGENT,
+                JSON
+        );
     }
 
     private DeepSeekClient.ModelResponse toolCall(

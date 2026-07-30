@@ -3,6 +3,7 @@ package com.example.agent;
 import com.example.agent.context.ContextCompactor;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
+import com.example.agent.prompts.SystemPromptAssembler;
 import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
@@ -77,12 +78,22 @@ public final class AgentApplication {
         codeTools.registerReadOnlyInto(subagentTools);
         new ToolHandlers(null, null, skillCatalog, JSON)
                 .registerSkillInto(subagentTools);
+        SystemPromptAssembler subagentPrompt =
+                new SystemPromptAssembler(
+                        projectRoot,
+                        subagentTools,
+                        skillCatalog,
+                        null,
+                        true,
+                        SystemPromptAssembler.AgentRole.SUBAGENT,
+                        JSON
+                );
         Subagent subagent = new Subagent(
                 modelClient,
                 subagentTools,
                 hooks,
-                skillCatalog,
                 contextCompactor,
+                subagentPrompt,
                 JSON
         );
 
@@ -90,15 +101,25 @@ public final class AgentApplication {
         codeTools.registerInto(tools);
         new ToolHandlers(todoStore, subagent, skillCatalog, JSON)
                 .registerInto(tools);
+        SystemPromptAssembler parentPrompt =
+                new SystemPromptAssembler(
+                        projectRoot,
+                        tools,
+                        skillCatalog,
+                        memorySystem,
+                        true,
+                        SystemPromptAssembler.AgentRole.PARENT,
+                        JSON
+                );
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
                 tools,
                 hooks,
                 todoStore,
-                skillCatalog,
                 contextCompactor,
                 memorySystem,
+                parentPrompt,
                 JSON
         );
 
@@ -109,44 +130,49 @@ public final class AgentApplication {
                 sendJson(exchange, 405, Map.of("error", "Method not allowed"));
                 return;
             }
-            sendJson(exchange, 200, Map.of(
-                    "ok", true,
-                    "model", model,
-                    "configured", !apiKey.isBlank(),
-                    "stage", "s09-memory",
-                    "memory", Map.of(
-                            "enabled", true,
-                            "count", memorySystem.count(),
-                            "intelligentLoading", true,
-                            "injectedAfterCompaction", true
-                    ),
-                    "contextCompact", Map.of(
-                            "enabled", true,
-                            "tokenThreshold", contextTokenThreshold,
-                            "order", "L3->L1->L2->L4",
-                            "reactiveFallback", true
-                    ),
-                    "skills", Map.of(
-                            "available", skillCatalog.discover().size(),
-                            "onDemand", true
-                    ),
-                    "todos", todoStore.summary(),
-                    "subagent", Map.of(
-                            "enabled", true,
-                            "recursiveTaskAllowed", subagentTools.hasTool("task"),
-                            "readOnly", true
-                    ),
-                    "hooks", Map.of(
-                            HookEvent.USER_PROMPT_SCRIPT.displayName(),
-                            hooks.registeredCount(HookEvent.USER_PROMPT_SCRIPT),
-                            HookEvent.PRE_TOOL_USE.displayName(),
-                            hooks.registeredCount(HookEvent.PRE_TOOL_USE),
-                            HookEvent.POST_TOOL_USE.displayName(),
-                            hooks.registeredCount(HookEvent.POST_TOOL_USE),
-                            HookEvent.STOP.displayName(),
-                            hooks.registeredCount(HookEvent.STOP)
-                    )
+            Map<String, Object> health = new HashMap<>();
+            health.put("ok", true);
+            health.put("model", model);
+            health.put("configured", !apiKey.isBlank());
+            health.put("stage", "s10-system-prompt");
+            health.put("memory", Map.of(
+                    "enabled", true,
+                    "count", memorySystem.count(),
+                    "intelligentLoading", true,
+                    "injectedAfterCompaction", true
             ));
+            health.put("systemPrompt", Map.of(
+                    "runtimeAssembly", true,
+                    "conditionalSections", true,
+                    "cache", parentPrompt.cacheStats()
+            ));
+            health.put("contextCompact", Map.of(
+                    "enabled", true,
+                    "tokenThreshold", contextTokenThreshold,
+                    "order", "L3->L1->L2->L4",
+                    "reactiveFallback", true
+            ));
+            health.put("skills", Map.of(
+                    "available", skillCatalog.discover().size(),
+                    "onDemand", true
+            ));
+            health.put("todos", todoStore.summary());
+            health.put("subagent", Map.of(
+                    "enabled", true,
+                    "recursiveTaskAllowed", subagentTools.hasTool("task"),
+                    "readOnly", true
+            ));
+            health.put("hooks", Map.of(
+                    HookEvent.USER_PROMPT_SCRIPT.displayName(),
+                    hooks.registeredCount(HookEvent.USER_PROMPT_SCRIPT),
+                    HookEvent.PRE_TOOL_USE.displayName(),
+                    hooks.registeredCount(HookEvent.PRE_TOOL_USE),
+                    HookEvent.POST_TOOL_USE.displayName(),
+                    hooks.registeredCount(HookEvent.POST_TOOL_USE),
+                    HookEvent.STOP.displayName(),
+                    hooks.registeredCount(HookEvent.STOP)
+            ));
+            sendJson(exchange, 200, health);
         });
 
         server.createContext("/api/chat", exchange -> {

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public final class ToolRegistry {
@@ -31,6 +32,10 @@ public final class ToolRegistry {
 
     public boolean hasTool(String name) {
         return tools.containsKey(name);
+    }
+
+    public List<String> toolNames() {
+        return List.copyOf(tools.keySet());
     }
 
     public ArrayNode definitions(){
