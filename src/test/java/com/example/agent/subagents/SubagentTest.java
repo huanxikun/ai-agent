@@ -1,0 +1,226 @@
+package com.example.agent.subagents;
+
+import com.example.agent.DeepSeekClient;
+import com.example.agent.hooks.DefaultAgentHooks;
+import com.example.agent.hooks.HookContext;
+import com.example.agent.hooks.HookEvent;
+import com.example.agent.hooks.HookRegistry;
+import com.example.agent.hooks.PermissionHooks;
+import com.example.agent.permissions.FilePermissionService;
+import com.example.agent.permissions.HumanApprovalGate;
+import com.example.agent.todos.TodoStore;
+import com.example.agent.tools.CodeTools;
+import com.example.agent.tools.ToolHandlers;
+import com.example.agent.tools.ToolRegistry;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class SubagentTest {
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    @TempDir
+    Path projectRoot;
+
+    @Test
+    void childRegistryContainsOnlyReadToolsAndStillRunsHooks() throws Exception {
+        Path backend = projectRoot.resolve("src/Backend.java");
+        Files.createDirectories(backend.getParent());
+        Files.writeString(backend, "class Backend { void run() {} }");
+
+        HookRegistry hooks = configuredHooks();
+        AtomicInteger preCalls = new AtomicInteger();
+        AtomicInteger postCalls = new AtomicInteger();
+        hooks.register_hooks(
+                HookEvent.PRE_TOOL_USE,
+                context -> {
+                    preCalls.incrementAndGet();
+                    return com.example.agent.hooks.HookResult.allow();
+                }
+        );
+        hooks.register_hooks(
+                HookEvent.POST_TOOL_USE,
+                context -> {
+                    postCalls.incrementAndGet();
+                    return com.example.agent.hooks.HookResult.allow();
+                }
+        );
+
+        ToolRegistry childTools = readOnlyTools(hooks);
+        assertTrue(childTools.hasTool("list_files"));
+        assertTrue(childTools.hasTool("search_code"));
+        assertTrue(childTools.hasTool("read_file"));
+        assertFalse(childTools.hasTool("task"));
+        assertFalse(childTools.hasTool("create_file"));
+        assertEquals(3, childTools.definitions().size());
+
+        AtomicInteger modelCalls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions) -> {
+                    int call = modelCalls.getAndIncrement();
+                    if (call == 0) {
+                        assertEquals(2, messages.size());
+                        assertEquals(
+                                "检查 Backend.java",
+                                messages.path(1).path("content").asText()
+                        );
+                        return toolCall(
+                                "read-1",
+                                "read_file",
+                                JSON.createObjectNode().put(
+                                        "path",
+                                        "src/Backend.java"
+                                )
+                        );
+                    }
+
+                    assertTrue(
+                            messages.path(messages.size() - 1)
+                                    .path("content")
+                                    .asText()
+                                    .contains("class Backend")
+                    );
+                    return finalResponse("Backend.run 位于 src/Backend.java。");
+                },
+                childTools,
+                hooks,
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "后端研究",
+                "检查 Backend.java",
+                "parent-run"
+        );
+
+        assertEquals(2, result.steps());
+        assertEquals(1, result.toolCalls());
+        assertTrue(result.text().contains("Backend.run"));
+        assertEquals(1, preCalls.get());
+        assertEquals(1, postCalls.get());
+    }
+
+    @Test
+    void subagentExplicitlyRejectsRecursiveTaskCall() throws Exception {
+        HookRegistry hooks = configuredHooks();
+        ToolRegistry childTools = readOnlyTools(hooks);
+        Subagent subagent = new Subagent(
+                (messages, definitions) -> toolCall(
+                        "recursive-1",
+                        "task",
+                        JSON.createObjectNode()
+                                .put("description", "nested")
+                                .put("task", "spawn again")
+                ),
+                childTools,
+                hooks,
+                JSON
+        );
+
+        IllegalStateException error = assertThrows(
+                IllegalStateException.class,
+                () -> subagent.run("禁止递归", "尝试递归", "parent")
+        );
+
+        assertTrue(error.getMessage().contains("禁止递归"));
+    }
+
+    @Test
+    void parentTaskToolDelegatesToSubagentExecutor() throws Exception {
+        AtomicInteger executions = new AtomicInteger();
+        SubagentExecutor executor = (description, task, parentRunId) -> {
+            executions.incrementAndGet();
+            assertEquals("研究 Hooks", description);
+            assertEquals("读取 HookRegistry", task);
+            assertEquals("parent", parentRunId);
+            return new SubagentExecutor.SubagentResult("结论", 2, 1);
+        };
+
+        HookRegistry hooks = new HookRegistry();
+        ToolRegistry parentTools = new ToolRegistry(JSON, hooks);
+        new ToolHandlers(new TodoStore(), executor, JSON).registerInto(parentTools);
+        assertTrue(parentTools.hasTool("task"));
+
+        ObjectNode arguments = JSON.createObjectNode()
+                .put("description", "研究 Hooks")
+                .put("task", "读取 HookRegistry");
+        JsonNode output = JSON.readTree(parentTools.execute(
+                "task",
+                arguments,
+                HookContext.forTool(
+                        "parent",
+                        "large task",
+                        "task",
+                        arguments,
+                        1
+                )
+        ));
+
+        assertEquals(1, executions.get());
+        assertEquals("completed", output.path("status").asText());
+        assertEquals("结论", output.path("result").asText());
+    }
+
+    private HookRegistry configuredHooks() throws Exception {
+        HookRegistry hooks = new HookRegistry();
+        DefaultAgentHooks.register_hooks(hooks);
+        PermissionHooks.register_hooks(
+                hooks,
+                new FilePermissionService(projectRoot)
+        );
+        return hooks;
+    }
+
+    private ToolRegistry readOnlyTools(HookRegistry hooks) {
+        ToolRegistry tools = new ToolRegistry(JSON, hooks);
+        new CodeTools(
+                projectRoot,
+                new HumanApprovalGate(),
+                hooks,
+                JSON
+        ).registerReadOnlyInto(tools);
+        return tools;
+    }
+
+    private DeepSeekClient.ModelResponse toolCall(
+            String callId,
+            String name,
+            ObjectNode arguments
+    ) throws Exception {
+        ObjectNode message = JSON.createObjectNode();
+        message.put("role", "assistant");
+        message.putNull("content");
+        ArrayNode calls = message.putArray("tool_calls");
+        ObjectNode call = calls.addObject();
+        call.put("id", callId);
+        call.put("type", "function");
+        call.putObject("function")
+                .put("name", name)
+                .put("arguments", JSON.writeValueAsString(arguments));
+        return new DeepSeekClient.ModelResponse(
+                "",
+                List.of(new DeepSeekClient.ToolCall(callId, name, arguments)),
+                message
+        );
+    }
+
+    private DeepSeekClient.ModelResponse finalResponse(String text) {
+        ObjectNode message = JSON.createObjectNode();
+        message.put("role", "assistant");
+        message.put("content", text);
+        return new DeepSeekClient.ModelResponse(text, List.of(), message);
+    }
+}

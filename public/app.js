@@ -36,8 +36,8 @@ async function initialize() {
     const response = await fetch("/api/health");
     const data = await response.json();
     elements.provider.textContent = data.configured
-      ? `${data.model} · S05 TodoWrite`
-      : "API Key 未配置 · S05 TodoWrite";
+      ? `${data.model} · S06 Subagent`
+      : "API Key 未配置 · S06 Subagent";
   } catch {
     elements.provider.textContent = "Java 服务未连接";
   }

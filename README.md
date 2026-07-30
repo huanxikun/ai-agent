@@ -1,100 +1,91 @@
-# My Agent · S05 TodoWrite
+# My Agent · S06 Subagent
 
-S05 在 S04 Agent Cycle Hooks 上加入进程内 TodoWrite，以及连续三轮未更新 Todo 时自动注入的 Nag Reminder。
+S06 在 TodoWrite 计划能力之上加入受限 Subagent。当父 Agent 判断代码研究任务过大且可以独立拆分时，可以调用 `task` 启动一个上下文隔离的子 Agent。
 
-## TodoWrite
+## task 工具
 
-`ToolHandlers` 注册 `todo_write`，接收完整的 Todo 列表：
+父 Agent 调用：
 
 ```json
 {
-  "todos": [
-    {
-      "content": "检查现有工具架构",
-      "status": "completed"
-    },
-    {
-      "content": "实现 TodoWrite",
-      "status": "in_progress"
-    },
-    {
-      "content": "运行测试",
-      "status": "pending"
-    }
-  ]
+  "description": "分析后端工具架构",
+  "task": "读取后端代码，说明 ToolRegistry、HookRegistry 和 CodeTools 的调用关系，附文件路径和行号。"
 }
 ```
 
-状态只能是：
+Subagent 完成后返回：
 
-- `pending`
-- `in_progress`
-- `completed`
-
-同时最多只能有一个 `in_progress`。每次调用会用新列表替换旧列表；传空数组可以清空。Todo 保存在当前 Java 进程内，服务重启后清空。
-
-每次更新会在终端打印：
-
-```text
-[TodoWrite 12:30:00] total=3 pending=1 in_progress=1 completed=1
-  [x] 检查现有工具架构
-  [>] 实现 TodoWrite
-  [ ] 运行测试
+```json
+{
+  "status": "completed",
+  "description": "分析后端工具架构",
+  "result": "研究结论",
+  "steps": 3,
+  "toolCalls": 2
+}
 ```
 
-## Nag Reminder
+## Subagent 限制
 
-Agent Loop 按模型调用轮次计数：
+- 独立的 system/user 消息，不继承父 Agent 对话历史
+- 最多执行 6 个模型步骤
+- 只注册：
+  - `list_files`
+  - `search_code`
+  - `read_file`
+- 不注册 `task`，因此无法递归创建 Subagent
+- 不注册 `todo_write`
+- 不注册创建、修改或删除文件的工具
+- 不继承父 Agent 的待审批操作
 
-```text
-模型一轮未调用 todo_write → missed=1
-模型一轮未调用 todo_write → missed=2
-模型一轮未调用 todo_write → 注入 Nag Reminder，重新计数
-```
+上下文隔离和只读工具集避免了额外的写入安全分支；但子 Agent 的每次工具调用仍通过父进程中的同一个 `HookRegistry`，因此 `PreToolUse` 路径边界检查、`PostToolUse` 和 `Stop` 生命周期依然生效。
 
-如果第三轮已经产生最终文本，Agent 不会立即结束，而是把提醒作为新的 system 消息加入上下文，再运行下一轮。调用 `todo_write` 会立即清零连续遗漏次数。
+## 允许读取的代码
+
+Subagent 可以使用只读工具检查项目结构，以及读取项目根目录内的后端 Java 代码。`.git`、`.env`、构建目录、二进制文件和项目目录之外的路径仍会被权限 Hook 拒绝。
 
 ## Agent Cycle
 
 ```text
-UserPromptScript
-  → Model
-  → TodoWrite Nag 检查
-  → PreToolUse
-  → Tool
-  → PostToolUse
-  → Model
+Parent Agent
+  → todo_write
+  → task
+      → isolated Subagent context
+      → list_files / search_code / read_file
+      → PreToolUse / PostToolUse Hooks
+      → result
+  → Parent Agent synthesis
   → Stop
 ```
 
-S04 的四类 Hook 继续保留：
+S03 文件权限、S04 Hooks、S05 TodoWrite 和三轮 Nag Reminder 均继续保留。
 
-- `UserPromptScript`
-- `PreToolUse`
-- `PostToolUse`
-- `Stop`
+## 前端布局
 
-文件创建、修改和删除仍经过路径边界、文件策略和人工审批三道闸门。
+- 输入框恢复为聊天区居中布局
+- 聊天记录仍使用独立局部滚动
+- 聊天滚动条保持在聊天区最右侧，靠近 Step 面板
+- Step 面板继续独立滚动
 
 ## 项目结构
 
 ```text
 src/main/java/com/example/agent/
-  AgentLoop.java                         Agent Cycle 与 Nag 注入
-  todos/
-    TodoItem.java                        Todo 数据
-    TodoStore.java                       进程内状态和终端输出
-    TodoNagReminder.java                 三轮遗漏计数
+  AgentLoop.java                         父 Agent
+  subagents/
+    Subagent.java                        隔离的只读子循环
+    SubagentExecutor.java                task 执行接口
   tools/
-    ToolHandlers.java                    todo_write
-    CodeTools.java                       文件工具
-  hooks/                                 S04 生命周期扩展
+    ToolHandlers.java                    todo_write 与 task
+    CodeTools.java                       完整/只读工具注册
+  hooks/                                 生命周期与权限 Hook
   permissions/                           文件权限策略
+  todos/                                 S05 进程内 Todo
 public/                                  对话、轨迹和审批界面
 src/test/                                自动化测试
 ```
 
-## 启动
+## 启动与验证
 
 ```powershell
 Copy-Item .env.example .env
@@ -102,8 +93,6 @@ mvn compile exec:java
 ```
 
 配置 `DEEPSEEK_API_KEY` 后访问 `http://localhost:3000`。
-
-## 验证
 
 ```powershell
 mvn test

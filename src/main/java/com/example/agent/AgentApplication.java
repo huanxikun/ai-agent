@@ -6,6 +6,7 @@ import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
+import com.example.agent.subagents.Subagent;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolHandlers;
@@ -51,9 +52,19 @@ public final class AgentApplication {
         PermissionHooks.register_hooks(hooks, permissions);
         TodoStore todoStore = new TodoStore();
 
+        CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
+        ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
+        codeTools.registerReadOnlyInto(subagentTools);
+        Subagent subagent = new Subagent(
+                modelClient,
+                subagentTools,
+                hooks,
+                JSON
+        );
+
         ToolRegistry tools = new ToolRegistry(JSON, hooks);
-        new CodeTools(projectRoot, approvals, hooks, JSON).registerInto(tools);
-        new ToolHandlers(todoStore, JSON).registerInto(tools);
+        codeTools.registerInto(tools);
+        new ToolHandlers(todoStore, subagent, JSON).registerInto(tools);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
@@ -74,8 +85,13 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s05-todowrite",
+                    "stage", "s06-subagent",
                     "todos", todoStore.summary(),
+                    "subagent", Map.of(
+                            "enabled", true,
+                            "recursiveTaskAllowed", subagentTools.hasTool("task"),
+                            "readOnly", true
+                    ),
                     "hooks", Map.of(
                             HookEvent.USER_PROMPT_SCRIPT.displayName(),
                             hooks.registeredCount(HookEvent.USER_PROMPT_SCRIPT),

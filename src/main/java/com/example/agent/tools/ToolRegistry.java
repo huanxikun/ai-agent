@@ -29,6 +29,10 @@ public final class ToolRegistry {
         return this;
     }
 
+    public boolean hasTool(String name) {
+        return tools.containsKey(name);
+    }
+
     public ArrayNode definitions(){
         ArrayNode definitions = json.createArrayNode();
 

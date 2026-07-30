@@ -18,7 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S05 Agent Cycle：在 S04 Hooks 上加入 TodoWrite 和三轮 Nag Reminder。
+ * S06 Agent Cycle：在 S05 TodoWrite 上加入受限、只读 Subagent。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -30,6 +30,8 @@ public final class AgentLoop {
             使用 list_files 了解结构，使用 search_code 定位关键词，使用 read_file 阅读实现。
             对多步骤任务，先调用 todo_write 建立完整列表；推进任务时持续更新状态。
             Todo 状态只能是 pending、in_progress 或 completed，同时最多一个 in_progress。
+            当代码研究任务过大、可以独立拆分时，使用 task 委派给只读 Subagent。
+            task 必须是单一、具体的研究任务；不要把简单问题或文件修改委派给 Subagent。
             用户明确要求创建文件时使用 create_file，修改现有文件时使用 edit_file，
             明确要求删除文件时使用 delete_file。
 

@@ -1,5 +1,6 @@
 package com.example.agent.tools;
 
+import com.example.agent.subagents.SubagentExecutor;
 import com.example.agent.todos.TodoItem;
 import com.example.agent.todos.TodoStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -26,15 +27,26 @@ public final class ToolHandlers {
     );
 
     private final TodoStore todoStore;
+    private final SubagentExecutor subagent;
     private final ObjectMapper json;
 
     public ToolHandlers(TodoStore todoStore, ObjectMapper json) {
+        this(todoStore, null, json);
+    }
+
+    public ToolHandlers(
+            TodoStore todoStore,
+            SubagentExecutor subagent,
+            ObjectMapper json
+    ) {
         this.todoStore = todoStore;
+        this.subagent = subagent;
         this.json = json;
     }
 
     public void registerInto(ToolRegistry registry) {
         registry.register(todoWrite());
+        if (subagent != null) registry.register(task());
     }
 
     private ToolDefinition todoWrite() {
@@ -115,5 +127,56 @@ public final class ToolHandlers {
                 "summary", summary,
                 "todos", todoStore.snapshot()
         ));
+    }
+
+    private ToolDefinition task() {
+        ObjectNode parameters = json.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("description")
+                .put("type", "string")
+                .put("description", "Subagent 任务的简短名称");
+        properties.putObject("task")
+                .put("type", "string")
+                .put("description", "单一、具体、只读的代码研究任务及期望输出");
+        parameters.putArray("required").add("description").add("task");
+        parameters.put("additionalProperties", false);
+
+        return new ToolDefinition(
+                "task",
+                "启动一个上下文隔离的只读 Subagent，适合拆分过大的代码研究任务。Subagent 不能再次调用 task。",
+                parameters,
+                (arguments, context) -> {
+                    String description = arguments.path("description")
+                            .asText("")
+                            .trim();
+                    String task = arguments.path("task")
+                            .asText("")
+                            .trim();
+                    if (description.isEmpty() || description.length() > 200) {
+                        throw new IllegalArgumentException(
+                                "description 必须为 1 到 200 个字符"
+                        );
+                    }
+                    if (task.isEmpty() || task.length() > 4_000) {
+                        throw new IllegalArgumentException(
+                                "task 必须为 1 到 4,000 个字符"
+                        );
+                    }
+
+                    SubagentExecutor.SubagentResult result = subagent.run(
+                            description,
+                            task,
+                            context.runId()
+                    );
+                    return json.writeValueAsString(Map.of(
+                            "status", "completed",
+                            "description", description,
+                            "result", result.text(),
+                            "steps", result.steps(),
+                            "toolCalls", result.toolCalls()
+                    ));
+                }
+        );
     }
 }

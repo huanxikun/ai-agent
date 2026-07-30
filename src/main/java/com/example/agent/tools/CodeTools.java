@@ -45,13 +45,21 @@ public final class CodeTools {
     }
 
     public void registerInto(ToolRegistry registry) {
+        registerReadOnlyInto(registry);
         registry
-                .register(listFilesTool())
-                .register(readFileTool())
-                .register(searchCodeTool())
                 .register(createFileTool())
                 .register(editFileTool())
                 .register(deleteFileTool());
+    }
+
+    /**
+     * Subagent 只获得项目结构和代码读取能力，不注册任何变更或派生工具。
+     */
+    public void registerReadOnlyInto(ToolRegistry registry) {
+        registry
+                .register(listFilesTool())
+                .register(readFileTool())
+                .register(searchCodeTool());
     }
 
     private boolean ignored(Path path) {
