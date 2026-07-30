@@ -36,8 +36,8 @@ async function initialize() {
     const response = await fetch("/api/health");
     const data = await response.json();
     elements.provider.textContent = data.configured
-      ? `${data.model} · s01`
-      : "s01 · API Key 未配置";
+      ? `${data.model} · 三道闸门`
+      : "API Key 未配置 · 三道闸门";
   } catch {
     elements.provider.textContent = "Java 服务未连接";
   }
@@ -68,6 +68,9 @@ async function submitMessage(rawMessage) {
     setMessageText(agentMessage, data.text);
     for (const event of data.trace) {
       addTrace(event.kind, event.title, event.detail);
+    }
+    for (const approval of data.approvals ?? []) {
+      addApprovalCard(approval);
     }
     elements.stepCount.textContent = data.steps;
     elements.toolCount.textContent = data.toolCalls;
@@ -136,6 +139,106 @@ function addTrace(kind, title, detail) {
 
   item.append(node, header, detailNode);
   elements.traceList.append(item);
+}
+
+function addApprovalCard(approval) {
+  elements.traceEmpty.style.display = "none";
+  const item = document.createElement("li");
+  item.className = "trace-item approval";
+
+  const node = document.createElement("span");
+  node.className = "trace-node";
+
+  const header = document.createElement("div");
+  header.className = "trace-title";
+  const title = document.createElement("span");
+  const actionNames = {
+    create: "请求创建",
+    edit: "请求修改",
+    delete: "请求删除"
+  };
+  title.textContent = `${actionNames[approval.operation] ?? "文件操作"} · ${approval.path}`;
+  const time = document.createElement("time");
+  time.textContent = "等待批准";
+  header.append(title, time);
+
+  const card = document.createElement("div");
+  card.className = "approval-card";
+  const gates = document.createElement("ul");
+  gates.className = "gate-list";
+  for (const gate of approval.gates ?? []) {
+    const row = document.createElement("li");
+    row.textContent = gate;
+    gates.append(row);
+  }
+
+  const preview = document.createElement("pre");
+  preview.textContent = approval.preview;
+
+  const result = document.createElement("p");
+  result.className = "approval-result";
+
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "reject";
+  reject.textContent = "拒绝";
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.className = approval.operation === "delete" ? "danger" : "approve";
+  approve.textContent = {
+    create: "批准创建",
+    edit: "批准修改",
+    delete: "批准删除"
+  }[approval.operation] ?? "批准";
+  actions.append(reject, approve);
+
+  reject.addEventListener("click", () => decideApproval(
+    approval,
+    "reject",
+    { approve, reject, result, item }
+  ));
+  approve.addEventListener("click", () => decideApproval(
+    approval,
+    "approve",
+    { approve, reject, result, item }
+  ));
+
+  card.append(gates, preview, result, actions);
+  item.append(node, header, card);
+  elements.traceList.append(item);
+  elements.traceList.scrollTop = elements.traceList.scrollHeight;
+}
+
+async function decideApproval(approval, decision, ui) {
+  ui.approve.disabled = true;
+  ui.reject.disabled = true;
+  ui.result.textContent = decision === "approve" ? "正在执行…" : "正在拒绝…";
+
+  try {
+    const response = await fetch(
+      `/api/approvals/${encodeURIComponent(approval.approvalId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision })
+      }
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "审批处理失败");
+
+    ui.item.classList.add(data.status === "approved" ? "done" : "rejected");
+    ui.result.textContent = data.status === "approved"
+      ? `${data.path} 已执行`
+      : "本次操作已拒绝";
+    ui.approve.remove();
+    ui.reject.remove();
+  } catch (error) {
+    ui.result.textContent = error.message;
+    ui.approve.disabled = false;
+    ui.reject.disabled = false;
+  }
 }
 
 function clearTrace() {

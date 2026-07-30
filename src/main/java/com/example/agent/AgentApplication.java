@@ -1,5 +1,7 @@
 package com.example.agent;
 
+import com.example.agent.permissions.FilePermissionService;
+import com.example.agent.permissions.HumanApprovalGate;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -14,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Executors;
 
 public final class AgentApplication {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -35,8 +38,10 @@ public final class AgentApplication {
                 env.getOrDefault("PROJECT_ROOT", ".")
         ).toAbsolutePath().normalize();
 
+        FilePermissionService permissions = new FilePermissionService(projectRoot);
+        HumanApprovalGate approvals = new HumanApprovalGate();
         ToolRegistry tools = new ToolRegistry(JSON);
-        new CodeTools(projectRoot, JSON).registerInto(tools);
+        new CodeTools(permissions, approvals, JSON).registerInto(tools);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
@@ -55,7 +60,7 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s01"
+                    "stage", "s03-permissions"
             ));
         });
 
@@ -81,11 +86,46 @@ public final class AgentApplication {
             }
         });
 
+        server.createContext("/api/approvals/", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, Map.of("error", "Method not allowed"));
+                return;
+            }
+
+            try {
+                String path = exchange.getRequestURI().getPath();
+                String approvalId = path.substring("/api/approvals/".length()).trim();
+                if (approvalId.isEmpty() || approvalId.contains("/")) {
+                    throw new IllegalArgumentException("审批 ID 无效");
+                }
+
+                byte[] body = exchange.getRequestBody().readNBytes(4097);
+                if (body.length > 4096) {
+                    throw new IllegalArgumentException("请求内容过大");
+                }
+                JsonNode request = JSON.readTree(body);
+                String decision = request.path("decision").asText("");
+
+                Object result = switch (decision) {
+                    case "approve" -> approvals.approve(approvalId);
+                    case "reject" -> approvals.reject(approvalId);
+                    default -> throw new IllegalArgumentException(
+                            "decision 必须是 approve 或 reject"
+                    );
+                };
+                sendJson(exchange, 200, result);
+            } catch (Exception exception) {
+                sendJson(exchange, 400, Map.of("error", exception.getMessage()));
+            }
+        });
+
         server.createContext("/", AgentApplication::serveStatic);
-        server.setExecutor(null);
+        server.setExecutor(Executors.newFixedThreadPool(
+                Math.max(4, Runtime.getRuntime().availableProcessors())
+        ));
         server.start();
 
-        System.out.printf("s01 Agent 已启动：http://localhost:%d%n", port);
+        System.out.printf("Agent 已启动：http://localhost:%d%n", port);
         System.out.printf("DeepSeek 模型：%s，API Key：%s%n", model, apiKey.isBlank() ? "未配置" : "已配置");
     }
 
