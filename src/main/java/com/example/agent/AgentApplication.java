@@ -1,5 +1,6 @@
 package com.example.agent;
 
+import com.example.agent.background.BackgroundTaskManager;
 import com.example.agent.context.ContextCompactor;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
@@ -79,6 +80,8 @@ public final class AgentApplication {
                 modelClient::complete,
                 JSON
         );
+        BackgroundTaskManager backgroundTasks =
+                new BackgroundTaskManager(JSON);
         ErrorRecovery errorRecovery = new ErrorRecovery(
                 model,
                 fallbackModel
@@ -133,6 +136,7 @@ public final class AgentApplication {
                 memorySystem,
                 parentPrompt,
                 errorRecovery,
+                backgroundTasks,
                 JSON
         );
 
@@ -147,12 +151,18 @@ public final class AgentApplication {
             health.put("ok", true);
             health.put("model", model);
             health.put("configured", !apiKey.isBlank());
-            health.put("stage", "s12-task-system");
+            health.put("stage", "s13-background-tasks");
             health.put("taskSystem", Map.of(
                     "enabled", true,
                     "persistent", true,
                     "directory", ".tasks",
                     "summary", taskStore.summary()
+            ));
+            health.put("backgroundTasks", Map.of(
+                    "enabled", true,
+                    "notificationFormat", "task_notification",
+                    "supportedTools", tools.backgroundToolNames(),
+                    "summary", backgroundTasks.summary()
             ));
             health.put("memory", Map.of(
                     "enabled", true,
@@ -260,6 +270,7 @@ public final class AgentApplication {
         server.setExecutor(Executors.newFixedThreadPool(
                 Math.max(4, Runtime.getRuntime().availableProcessors())
         ));
+        Runtime.getRuntime().addShutdownHook(new Thread(backgroundTasks::close));
         server.start();
 
         System.out.printf("Agent 已启动：http://localhost:%d%n", port);

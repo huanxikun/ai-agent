@@ -6,7 +6,16 @@ public record ToolDefinition(
     String name,
     String description,
     ObjectNode parameters,
-    ToolHandler handler
+    ToolHandler handler,
+    boolean supportsBackground
 
 ){
+    public ToolDefinition(
+            String name,
+            String description,
+            ObjectNode parameters,
+            ToolHandler handler
+    ) {
+        this(name, description, parameters, handler, false);
+    }
 }

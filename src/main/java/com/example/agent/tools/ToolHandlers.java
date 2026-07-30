@@ -354,12 +354,15 @@ public final class ToolHandlers {
         properties.putObject("task")
                 .put("type", "string")
                 .put("description", "单一、具体、只读的代码研究任务及期望输出");
+        properties.putObject("run_in_background")
+                .put("type", "boolean")
+                .put("description", "为较慢的只读研究任务启用后台执行，稍后通过 task_notification 注入结果");
         parameters.putArray("required").add("description").add("task");
         parameters.put("additionalProperties", false);
 
         return new ToolDefinition(
                 "task",
-                "启动一个上下文隔离的只读 Subagent，适合拆分过大的代码研究任务。Subagent 不能再次调用 task。",
+                "启动一个上下文隔离的只读 Subagent，适合拆分过大的代码研究任务。支持 run_in_background 后台执行；Subagent 不能再次调用 task。",
                 parameters,
                 (arguments, context) -> {
                     String description = arguments.path("description")
@@ -391,7 +394,8 @@ public final class ToolHandlers {
                             "steps", result.steps(),
                             "toolCalls", result.toolCalls()
                     ));
-                }
+                },
+                true
         );
     }
 }

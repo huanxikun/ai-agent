@@ -34,8 +34,20 @@ public final class ToolRegistry {
         return tools.containsKey(name);
     }
 
+    public boolean supportsBackground(String name) {
+        ToolDefinition tool = tools.get(name);
+        return tool != null && tool.supportsBackground();
+    }
+
     public List<String> toolNames() {
         return List.copyOf(tools.keySet());
+    }
+
+    public List<String> backgroundToolNames() {
+        return tools.values().stream()
+                .filter(ToolDefinition::supportsBackground)
+                .map(ToolDefinition::name)
+                .toList();
     }
 
     public ArrayNode definitions(){

@@ -47,6 +47,12 @@ public final class SystemPromptAssembler {
             这与 todo_write 不同：Todo 是当前进程的执行步骤，Task 是可恢复、可认领的持久目标。
             开始任务前先 claim_task，实际完成后才调用 complete_task。
             """;
+    private static final String BACKGROUND_TASK_SECTION = """
+            ## Background Tasks
+            支持后台执行的工具可通过 run_in_background=true 显式请求异步运行。
+            若模型未显式指定，Harness 也可能对明显较慢的任务启用后台执行。
+            后台工具会先返回 background_started 占位结果，完成后再通过 task_notification 注入结果。
+            """;
     private static final String FILE_MUTATION_SECTION = """
             ## File Mutations
             用户明确要求时才使用 create_file、edit_file 或 delete_file。
@@ -110,6 +116,7 @@ public final class SystemPromptAssembler {
                 role,
                 workspace.toString(),
                 enabledTools,
+                tools.backgroundToolNames(),
                 skillSection,
                 memorySection,
                 contextCompactEnabled
@@ -156,6 +163,9 @@ public final class SystemPromptAssembler {
                 "complete_task"
         )) {
             sections.add(PERSISTENT_TASK_SECTION);
+        }
+        if (!content.backgroundTools().isEmpty()) {
+            sections.add(BACKGROUND_TASK_SECTION);
         }
         if (hasAny(
                 content.enabledTools(),
@@ -226,6 +236,7 @@ public final class SystemPromptAssembler {
                 "claim_task",
                 "complete_task"
         )) sections.add("persistent_tasks");
+        if (!content.backgroundTools().isEmpty()) sections.add("background_tasks");
         if (hasAny(
                 content.enabledTools(),
                 "create_file",
@@ -254,12 +265,14 @@ public final class SystemPromptAssembler {
             AgentRole role,
             String workspace,
             List<String> enabledTools,
+            List<String> backgroundTools,
             String skillSection,
             String memorySection,
             boolean contextCompactEnabled
     ) {
         public PromptContent {
             enabledTools = List.copyOf(enabledTools);
+            backgroundTools = List.copyOf(backgroundTools);
             skillSection = skillSection == null ? "" : skillSection;
             memorySection = memorySection == null ? "" : memorySection;
         }

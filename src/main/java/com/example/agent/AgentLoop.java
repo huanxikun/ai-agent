@@ -1,5 +1,7 @@
 package com.example.agent;
 
+import com.example.agent.background.BackgroundTaskManager;
+import com.example.agent.background.BackgroundTaskManager.BackgroundNotification;
 import com.example.agent.context.ContextCompactor;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
@@ -35,6 +37,7 @@ public final class AgentLoop {
     private final MemorySystem memorySystem;
     private final SystemPromptAssembler systemPromptAssembler;
     private final ErrorRecovery errorRecovery;
+    private final BackgroundTaskManager backgroundTasks;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -46,6 +49,7 @@ public final class AgentLoop {
             MemorySystem memorySystem,
             SystemPromptAssembler systemPromptAssembler,
             ErrorRecovery errorRecovery,
+            BackgroundTaskManager backgroundTasks,
             ObjectMapper json
     ) {
         this.model = model;
@@ -56,6 +60,7 @@ public final class AgentLoop {
         this.memorySystem = memorySystem;
         this.systemPromptAssembler = systemPromptAssembler;
         this.errorRecovery = errorRecovery;
+        this.backgroundTasks = backgroundTasks;
         this.json = json;
     }
 
@@ -81,7 +86,11 @@ public final class AgentLoop {
                     initialContent
             );
             ArrayNode messages = json.createArrayNode();
+            ArrayNode memoryTranscript = json.createArrayNode();
             messages.addObject()
+                    .put("role", "system")
+                    .put("content", systemPrompt);
+            memoryTranscript.addObject()
                     .put("role", "system")
                     .put("content", systemPrompt);
             trace.add(event(
@@ -117,10 +126,10 @@ public final class AgentLoop {
                     "用户输入扩展执行完成"
             ));
 
+            injectBackgroundNotifications(messages, memoryTranscript, trace);
             messages.addObject()
                     .put("role", "user")
                     .put("content", userMessage);
-            ArrayNode memoryTranscript = json.createArrayNode();
             memoryTranscript.addObject()
                     .put("role", "user")
                     .put("content", userMessage);
@@ -260,31 +269,55 @@ public final class AgentLoop {
                             call.arguments(),
                             step
                     );
-                    trace.add(event(
-                            "hook",
-                            "Hook · PreToolUse",
-                            call.name()
-                    ));
-
                     String output;
-                    try {
-                        output = tools.execute(
-                                call.name(),
-                                call.arguments(),
-                                toolContext
-                        );
+                    if (shouldRunInBackground(call)) {
+                        BackgroundTaskManager.BackgroundStart started =
+                                backgroundTasks.start(
+                                        call.name(),
+                                        backgroundSummary(call),
+                                        () -> tools.execute(
+                                                call.name(),
+                                                call.arguments(),
+                                                toolContext
+                                        )
+                                );
+                        output = json.writeValueAsString(Map.of(
+                                "status", "background_started",
+                                "message",
+                                "Background task %s started. Result will be delivered via task_notification."
+                                        .formatted(started.id()),
+                                "backgroundTask", started
+                        ));
+                        trace.add(event(
+                                "background",
+                                "后台任务启动 · " + call.name(),
+                                started.id() + " · " + started.summary()
+                        ));
+                    } else {
                         trace.add(event(
                                 "hook",
-                                "Hook · PostToolUse",
-                                call.name() + " · success"
+                                "Hook · PreToolUse",
+                                call.name()
                         ));
-                    } catch (Exception exception) {
-                        trace.add(event(
-                                "hook",
-                                "Hook · PostToolUse",
-                                call.name() + " · failed"
-                        ));
-                        throw exception;
+                        try {
+                            output = tools.execute(
+                                    call.name(),
+                                    call.arguments(),
+                                    toolContext
+                            );
+                            trace.add(event(
+                                    "hook",
+                                    "Hook · PostToolUse",
+                                    call.name() + " · success"
+                            ));
+                        } catch (Exception exception) {
+                            trace.add(event(
+                                    "hook",
+                                    "Hook · PostToolUse",
+                                    call.name() + " · failed"
+                            ));
+                            throw exception;
+                        }
                     }
 
                     JsonNode outputNode = tryParseJson(output);
@@ -305,6 +338,8 @@ public final class AgentLoop {
                     item.put("content", output);
                     memoryTranscript.add(item.deepCopy());
                 }
+
+                injectBackgroundNotifications(messages, memoryTranscript, trace);
 
                 if (nagRequired) {
                     if (step == stepLimit && !reminderGraceTurnUsed) {
@@ -553,6 +588,102 @@ public final class AgentLoop {
         } catch (Exception exception) {
             return json.createObjectNode();
         }
+    }
+
+    private boolean shouldRunInBackground(DeepSeekClient.ToolCall call) {
+        if (backgroundTasks == null
+                || !tools.supportsBackground(call.name())) {
+            return false;
+        }
+        JsonNode arguments = call.arguments();
+        if (arguments.has("run_in_background")) {
+            return arguments.path("run_in_background").asBoolean(false);
+        }
+        return isSlowOperation(call.name(), arguments);
+    }
+
+    private boolean isSlowOperation(String toolName, JsonNode arguments) {
+        if (!"task".equals(toolName)) return false;
+        String description = arguments.path("description").asText("");
+        String task = arguments.path("task").asText("");
+        String combined = (description + " " + task).toLowerCase();
+        if (task.length() >= 240) return true;
+        return combined.contains("整个项目")
+                || combined.contains("全仓")
+                || combined.contains("所有文件")
+                || combined.contains("深入")
+                || combined.contains("全面");
+    }
+
+    private String backgroundSummary(DeepSeekClient.ToolCall call) {
+        if ("task".equals(call.name())) {
+            String description = call.arguments()
+                    .path("description")
+                    .asText("")
+                    .trim();
+            if (!description.isEmpty()) return description;
+        }
+        return call.name();
+    }
+
+    private void injectBackgroundNotifications(
+            ArrayNode messages,
+            ArrayNode memoryTranscript,
+            List<Map<String, Object>> trace
+    ) {
+        if (backgroundTasks == null) return;
+        List<BackgroundNotification> notifications =
+                backgroundTasks.collectNotifications();
+        if (notifications.isEmpty()) return;
+
+        String joined = notifications.stream()
+                .map(this::formatBackgroundNotification)
+                .reduce((left, right) -> left + "\n" + right)
+                .orElse("");
+
+        messages.addObject()
+                .put("role", "user")
+                .put("content", joined);
+        memoryTranscript.addObject()
+                .put("role", "user")
+                .put("content", joined);
+        trace.add(event(
+                "background",
+                "后台任务通知",
+                notifications.stream()
+                        .map(notification -> notification.id()
+                                + " · "
+                                + notification.status())
+                        .reduce((left, right) -> left + "，" + right)
+                        .orElse("")
+        ));
+    }
+
+    private String formatBackgroundNotification(
+            BackgroundNotification notification
+    ) {
+        return """
+                <task_notification>
+                  <task_id>%s</task_id>
+                  <status>%s</status>
+                  <tool>%s</tool>
+                  <summary>%s</summary>
+                  <detail>%s</detail>
+                </task_notification>
+                """.formatted(
+                notification.id(),
+                notification.status(),
+                notification.tool(),
+                xml(notification.summary()),
+                xml(notification.detail())
+        ).trim();
+    }
+
+    private String xml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
     }
 
     private Map<String, Object> event(String kind, String title, String detail) {

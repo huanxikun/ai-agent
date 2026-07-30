@@ -163,6 +163,8 @@ class SubagentTest {
         ToolRegistry parentTools = new ToolRegistry(JSON, hooks);
         new ToolHandlers(new TodoStore(), executor, JSON).registerInto(parentTools);
         assertTrue(parentTools.hasTool("task"));
+        assertTrue(parentTools.supportsBackground("task"));
+        assertTrue(parentTools.definitions().toString().contains("run_in_background"));
 
         ObjectNode arguments = JSON.createObjectNode()
                 .put("description", "研究 Hooks")

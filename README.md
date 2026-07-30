@@ -1,8 +1,11 @@
-# My Agent · S12 Task System
+# My Agent · S13 Background Tasks
 
-S12 在现有 Agent Harness 中加入磁盘持久化的任务图。它用于拆分和追踪跨会话的长期目标，与 S05 的进程内 `todo_write` 同时存在、职责不同。
+S13 在现有 Agent Harness 中加入后台任务能力，让较慢的只读研究任务可以异步执行，Agent 不必阻塞等待结果。
 
-实现参考：`D:\vsCode\learn\learn-claude-code\s12_task_system\README.md`。
+实现参考：
+
+- `D:\vsCode\learn\learn-claude-code\s12_task_system\README.md`
+- `D:\vsCode\learn\learn-claude-code\s13_background_tasks\README.md`
 
 ## TodoWrite 与 Task System
 
@@ -25,6 +28,18 @@ S12 在现有 Agent Harness 中加入磁盘持久化的任务图。它用于拆�
 - `complete_task`：完成已认领任务，状态变为 `completed`，并报告解锁的下游任务。
 
 所有任务工具都通过现有 `PRE_TOOL_USE` / `POST_TOOL_USE` Hook 管线。S06 的 `task` 工具仍表示“启动只读 Subagent”，与这些持久任务工具没有命名冲突。
+
+## Background Tasks
+
+当前仓库没有教学版 s13 里的 `bash` 工具，因此这里把后台执行能力适配到父 Agent 的 `task` 工具：
+
+- `task` 新增 `run_in_background: boolean`
+- 显式传入 `run_in_background=true` 时，会把只读 Subagent 放到后台线程执行
+- 若模型未显式指定，系统会对明显较慢的大范围研究任务做启发式兜底
+- 工具先返回 `background_started` 占位结果
+- 后台任务完成后，会以 `<task_notification>` 注入后续轮次
+
+这样 Agent 可以在 Subagent 后台读取代码时，继续完成当前轮中的其他同步操作。
 
 ## 数据结构与状态
 
@@ -53,12 +68,14 @@ pending ──claim_task──> in_progress ──complete_task──> completed
 
 ## Runtime System Prompt
 
-S10 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent Task System` 片段，明确：
+S10/S13 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent Task System` 和 `Background Tasks` 片段，明确：
 
 - Task 与 Todo 的语义边界；
 - 长期任务先认领再开始；
 - 只有真正完成后才能标记完成；
 - 依赖任务全部 `completed` 后才可认领。
+- 后台工具可以通过 `run_in_background=true` 显式请求异步运行；
+- 后台完成后通过 `task_notification` 回注。
 
 只读 Subagent 不注册持久任务工具，保持 S06 的上下文隔离和权限边界。
 
@@ -68,7 +85,7 @@ S10 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent Task
 
 ```json
 {
-  "stage": "s12-task-system",
+  "stage": "s13-background-tasks",
   "taskSystem": {
     "enabled": true,
     "persistent": true,
@@ -78,6 +95,17 @@ S10 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent Task
       "pending": 0,
       "inProgress": 0,
       "completed": 0
+    }
+  },
+  "backgroundTasks": {
+    "enabled": true,
+    "notificationFormat": "task_notification",
+    "supportedTools": ["task"],
+    "summary": {
+      "total": 0,
+      "running": 0,
+      "completedPendingDelivery": 0,
+      "failedPendingDelivery": 0
     }
   }
 }
@@ -95,6 +123,7 @@ S10 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent Task
 - S10：运行时 System Prompt 组装和缓存
 - S11：max_tokens、prompt_too_long、429/529 三路径恢复
 - S12：持久 Task System 与依赖解锁
+- S13：Background Tasks（只读 Subagent 后台执行与通知注入）
 
 ## 启动与验证
 

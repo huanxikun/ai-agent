@@ -174,6 +174,29 @@ class SystemPromptAssemblerTest {
         assertFalse(prompt.contains("create_file"));
     }
 
+    @Test
+    void includesBackgroundSectionOnlyWhenRuntimeToolSupportsIt()
+            throws Exception {
+        ToolRegistry tools = new ToolRegistry(JSON, new HookRegistry());
+        tools.register(backgroundTool("task"));
+        SystemPromptAssembler assembler = assembler(
+                tools,
+                null,
+                null,
+                SystemPromptAssembler.AgentRole.PARENT
+        );
+
+        String prompt = assembler.get_system_prompt(
+                assembler.update_content()
+        );
+
+        assertTrue(prompt.contains("## Background Tasks"));
+        assertTrue(prompt.contains("run_in_background"));
+        assertTrue(assembler.loadedSections(
+                assembler.update_content()
+        ).contains("background_tasks"));
+    }
+
     private SystemPromptAssembler assembler(
             ToolRegistry tools,
             SkillCatalog skills,
@@ -199,6 +222,18 @@ class SystemPromptAssemblerTest {
                 name,
                 parameters,
                 (arguments, context) -> "{}"
+        );
+    }
+
+    private ToolDefinition backgroundTool(String name) {
+        ObjectNode parameters = JSON.createObjectNode();
+        parameters.put("type", "object");
+        return new ToolDefinition(
+                name,
+                name,
+                parameters,
+                (arguments, context) -> "{}",
+                true
         );
     }
 }
