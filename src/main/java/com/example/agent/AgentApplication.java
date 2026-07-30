@@ -4,6 +4,7 @@ import com.example.agent.context.ContextCompactor;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
 import com.example.agent.prompts.SystemPromptAssembler;
+import com.example.agent.recovery.ErrorRecovery;
 import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
@@ -41,6 +42,10 @@ public final class AgentApplication {
         int port = Integer.parseInt(env.getOrDefault("PORT", "3000"));
         String apiKey = env.getOrDefault("DEEPSEEK_API_KEY", "");
         String model = env.getOrDefault("DEEPSEEK_MODEL", "deepseek-v4-flash");
+        String fallbackModel = env.getOrDefault(
+                "DEEPSEEK_FALLBACK_MODEL",
+                env.getOrDefault("FALLBACK_MODEL_ID", "")
+        );
         String baseUrl = env.getOrDefault("DEEPSEEK_BASE_URL", "https://api.deepseek.com");
 
         DeepSeekClient modelClient =
@@ -72,6 +77,10 @@ public final class AgentApplication {
                 modelClient::complete,
                 JSON
         );
+        ErrorRecovery errorRecovery = new ErrorRecovery(
+                model,
+                fallbackModel
+        );
 
         CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
         ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
@@ -94,6 +103,7 @@ public final class AgentApplication {
                 hooks,
                 contextCompactor,
                 subagentPrompt,
+                errorRecovery,
                 JSON
         );
 
@@ -120,6 +130,7 @@ public final class AgentApplication {
                 contextCompactor,
                 memorySystem,
                 parentPrompt,
+                errorRecovery,
                 JSON
         );
 
@@ -134,7 +145,7 @@ public final class AgentApplication {
             health.put("ok", true);
             health.put("model", model);
             health.put("configured", !apiKey.isBlank());
-            health.put("stage", "s10-system-prompt");
+            health.put("stage", "s11-error-recovery");
             health.put("memory", Map.of(
                     "enabled", true,
                     "count", memorySystem.count(),
@@ -145,6 +156,13 @@ public final class AgentApplication {
                     "runtimeAssembly", true,
                     "conditionalSections", true,
                     "cache", parentPrompt.cacheStats()
+            ));
+            health.put("errorRecovery", Map.of(
+                    "enabled", true,
+                    "maxTokensEscalation", "8000->64000",
+                    "promptTooLongRetries", 1,
+                    "transientRetries", ErrorRecovery.MAX_TRANSIENT_RETRIES,
+                    "fallbackModelConfigured", !fallbackModel.isBlank()
             ));
             health.put("contextCompact", Map.of(
                     "enabled", true,

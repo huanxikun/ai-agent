@@ -37,14 +37,32 @@ public final class DeepSeekClient {
             ArrayNode messages,
             ArrayNode tools
     ) throws Exception {
+        return createResponse(messages, tools, 8_000, model);
+    }
+
+    public ModelResponse createResponse(
+            ArrayNode messages,
+            ArrayNode tools,
+            int maxTokens,
+            String requestedModel
+    ) throws Exception {
         if (apiKey.isBlank()) {
             throw new IllegalStateException("请先在 .env 中配置 DEEPSEEK_API_KEY");
         }
+        if (maxTokens < 1) {
+            throw new IllegalArgumentException("maxTokens 必须大于 0");
+        }
 
         ObjectNode body = json.createObjectNode();
-        body.put("model", model);
+        body.put(
+                "model",
+                requestedModel == null || requestedModel.isBlank()
+                        ? model
+                        : requestedModel
+        );
         body.set("messages", messages);
         body.set("tools", tools);
+        body.put("max_tokens", maxTokens);
         body.put("tool_choice", "auto");
         body.putObject("thinking").put("type", "disabled");
 
@@ -149,7 +167,12 @@ public final class DeepSeekClient {
             String code = payload == null
                     ? ""
                     : payload.path("error").path("code").asText("");
-            throw new DeepSeekException(response.statusCode(), code, message);
+            throw new DeepSeekException(
+                    response.statusCode(),
+                    code,
+                    message,
+                    parseRetryAfter(response)
+            );
         }
         return payload;
     }
@@ -195,11 +218,39 @@ public final class DeepSeekClient {
             ));
         }
 
+        String finishReason = payload.path("choices")
+                .path(0)
+                .path("finish_reason")
+                .asText("");
+        String stopReason = switch (finishReason) {
+            case "length" -> "max_tokens";
+            case "tool_calls" -> "tool_use";
+            default -> "end_turn";
+        };
         return new ModelResponse(
                 message.path("content").asText(""),
                 calls,
-                message.deepCopy()
+                message.deepCopy(),
+                stopReason
         );
+    }
+
+    private Long parseRetryAfter(HttpResponse<String> response) {
+        String value = response.headers()
+                .firstValue("Retry-After")
+                .orElse("")
+                .trim();
+        if (value.isEmpty()) return null;
+        try {
+            double seconds = Double.parseDouble(value);
+            return Math.max(0L, Math.round(seconds * 1_000));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    public String modelName() {
+        return model;
     }
 
     public record ToolCall(String callId, String name, JsonNode arguments) {
@@ -208,19 +259,38 @@ public final class DeepSeekClient {
     public record ModelResponse(
             String text,
             List<ToolCall> toolCalls,
-            JsonNode assistantMessage
+            JsonNode assistantMessage,
+            String stopReason
     ) {
+        public ModelResponse(
+                String text,
+                List<ToolCall> toolCalls,
+                JsonNode assistantMessage
+        ) {
+            this(text, toolCalls, assistantMessage, "end_turn");
+        }
     }
 
     public static final class DeepSeekException
             extends IllegalStateException {
         private final int statusCode;
         private final String code;
+        private final Long retryAfterMs;
 
         public DeepSeekException(int statusCode, String code, String message) {
+            this(statusCode, code, message, null);
+        }
+
+        public DeepSeekException(
+                int statusCode,
+                String code,
+                String message,
+                Long retryAfterMs
+        ) {
             super(message);
             this.statusCode = statusCode;
             this.code = code;
+            this.retryAfterMs = retryAfterMs;
         }
 
         public int statusCode() {
@@ -229,6 +299,10 @@ public final class DeepSeekClient {
 
         public String code() {
             return code;
+        }
+
+        public Long retryAfterMs() {
+            return retryAfterMs;
         }
     }
 }

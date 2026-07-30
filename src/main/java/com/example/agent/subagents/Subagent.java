@@ -6,6 +6,7 @@ import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.prompts.SystemPromptAssembler;
+import com.example.agent.recovery.ErrorRecovery;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -14,7 +15,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.UUID;
 
 /**
- * 使用 S10 运行时 Prompt 的只读、不可递归 Subagent。
+ * 使用 S10 Prompt 与 S11 错误恢复的只读、不可递归 Subagent。
  */
 public final class Subagent implements SubagentExecutor {
     private static final int MAX_STEPS = 6;
@@ -24,6 +25,7 @@ public final class Subagent implements SubagentExecutor {
     private final HookRegistry hooks;
     private final ContextCompactor contextCompactor;
     private final SystemPromptAssembler systemPromptAssembler;
+    private final ErrorRecovery errorRecovery;
     private final ObjectMapper json;
 
     public Subagent(
@@ -32,6 +34,7 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ContextCompactor contextCompactor,
             SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
             ObjectMapper json
     ) {
         this(
@@ -40,6 +43,7 @@ public final class Subagent implements SubagentExecutor {
                 hooks,
                 contextCompactor,
                 systemPromptAssembler,
+                errorRecovery,
                 json
         );
     }
@@ -50,6 +54,7 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ContextCompactor contextCompactor,
             SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
             ObjectMapper json
     ) {
         this.model = model;
@@ -57,6 +62,7 @@ public final class Subagent implements SubagentExecutor {
         this.hooks = hooks;
         this.contextCompactor = contextCompactor;
         this.systemPromptAssembler = systemPromptAssembler;
+        this.errorRecovery = errorRecovery;
         this.json = json;
     }
 
@@ -70,6 +76,10 @@ public final class Subagent implements SubagentExecutor {
         int lastStep = 0;
         int toolCalls = 0;
         boolean stopped = false;
+        int stepLimit = MAX_STEPS;
+        ErrorRecovery.RecoveryState recoveryState =
+                errorRecovery.newState();
+        StringBuilder recoveredOutput = new StringBuilder();
 
         System.out.printf(
                 "%n[Subagent start] %s%n  task: %s%n",
@@ -96,7 +106,8 @@ public final class Subagent implements SubagentExecutor {
                     .put("role", "user")
                     .put("content", task);
 
-            for (int step = 1; step <= MAX_STEPS; step++) {
+            stepLoop:
+            for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
                 String refreshed =
                         systemPromptAssembler.get_system_prompt(
@@ -126,23 +137,49 @@ public final class Subagent implements SubagentExecutor {
                 }
 
                 DeepSeekClient.ModelResponse response;
-                try {
-                    response = model.createResponse(
-                            messages,
-                            tools.definitions()
+                while (true) {
+                    response = callBusinessModel(messages, recoveryState);
+                    if (!"max_tokens".equals(response.stopReason())) break;
+                    ErrorRecovery.MaxTokensAction action =
+                            errorRecovery.handleMaxTokens(recoveryState);
+                    System.out.printf(
+                            "[Subagent recovery] max_tokens action=%s max=%d continuation=%d%n",
+                            action,
+                            recoveryState.maxTokens(),
+                            recoveryState.continuations()
                     );
-                } catch (Exception exception) {
-                    if (contextCompactor == null
-                            || !DeepSeekClient.isPromptTooLong(exception)) {
-                        throw exception;
+                    if (action
+                            == ErrorRecovery.MaxTokensAction.ESCALATE_AND_RETRY) {
+                        continue;
                     }
-                    contextCompactor.reactiveCompact(messages);
-                    System.out.println(
-                            "[Subagent compact] reactiveCompact 后重试一次"
+                    ObjectNode truncated = json.createObjectNode();
+                    truncated.put("role", "assistant");
+                    truncated.put("content", response.text());
+                    messages.add(truncated);
+                    appendRecovered(recoveredOutput, response.text());
+                    if (action
+                            == ErrorRecovery.MaxTokensAction.APPEND_AND_CONTINUE) {
+                        if (step == stepLimit) stepLimit++;
+                        messages.addObject()
+                                .put("role", "user")
+                                .put(
+                                        "content",
+                                        ErrorRecovery.CONTINUATION_PROMPT
+                                );
+                        continue stepLoop;
+                    }
+                    triggerStop(
+                            runId,
+                            task,
+                            step,
+                            "max_tokens_recovery_exhausted",
+                            null
                     );
-                    response = model.createResponse(
-                            messages,
-                            tools.definitions()
+                    stopped = true;
+                    return new SubagentResult(
+                            recoveredOutput.toString().trim(),
+                            step,
+                            toolCalls
                     );
                 }
                 messages.add(response.assistantMessage());
@@ -160,7 +197,14 @@ public final class Subagent implements SubagentExecutor {
                             step,
                             toolCalls
                     );
-                    return new SubagentResult(response.text(), step, toolCalls);
+                    String finalText = recoveredOutput.isEmpty()
+                            ? response.text()
+                            : recoveredOutput + "\n" + response.text();
+                    return new SubagentResult(
+                            finalText.trim(),
+                            step,
+                            toolCalls
+                    );
                 }
 
                 for (DeepSeekClient.ToolCall call : response.toolCalls()) {
@@ -211,6 +255,55 @@ public final class Subagent implements SubagentExecutor {
         }
     }
 
+    private DeepSeekClient.ModelResponse callBusinessModel(
+            ArrayNode messages,
+            ErrorRecovery.RecoveryState state
+    ) throws Exception {
+        try {
+            return withTransientRetry(messages, state);
+        } catch (Exception exception) {
+            if (contextCompactor == null
+                    || !DeepSeekClient.isPromptTooLong(exception)
+                    || state.reactiveCompactAttempted()) {
+                throw exception;
+            }
+            contextCompactor.reactiveCompact(messages);
+            state.markReactiveCompactAttempted();
+            System.out.println(
+                    "[Subagent recovery] prompt_too_long → reactiveCompact"
+            );
+            return withTransientRetry(messages, state);
+        }
+    }
+
+    private DeepSeekClient.ModelResponse withTransientRetry(
+            ArrayNode messages,
+            ErrorRecovery.RecoveryState state
+    ) throws Exception {
+        return errorRecovery.withRetry(
+                (maxTokens, requestedModel) -> model.createResponse(
+                        messages,
+                        tools.definitions(),
+                        maxTokens,
+                        requestedModel
+                ),
+                state,
+                event -> System.out.printf(
+                        "[Subagent recovery] %s attempt=%d delayMs=%d %s%n",
+                        event.kind(),
+                        event.attempt(),
+                        event.delayMs(),
+                        event.detail()
+                )
+        );
+    }
+
+    private void appendRecovered(StringBuilder output, String text) {
+        if (text == null || text.isBlank()) return;
+        if (!output.isEmpty()) output.append('\n');
+        output.append(text);
+    }
+
     private void triggerStop(
             String runId,
             String task,
@@ -228,7 +321,9 @@ public final class Subagent implements SubagentExecutor {
     interface ModelCall {
         DeepSeekClient.ModelResponse createResponse(
                 ArrayNode messages,
-                ArrayNode tools
+                ArrayNode tools,
+                int maxTokens,
+                String model
         ) throws Exception;
     }
 }

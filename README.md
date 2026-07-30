@@ -1,143 +1,132 @@
-# My Agent · S10 System Prompt
+# My Agent · S11 Error Recovery
 
-S10 将父 Agent 和 Subagent 的整块硬编码 system prompt 替换为运行时组装：独立 Section 根据真实状态按需拼接，相同状态命中确定性缓存，工具、Skill 或 Memory 发生变化时自动生成新的 prompt。
+S11 在 S10 运行时 Prompt、S08 Context Compact 和 S09 Memory Loading 之后，为业务 LLM 调用加入三条独立恢复路径。错误不再默认终止 Agent，而是先分类，再执行有限、可观察的恢复。
 
-实现参考：`D:\vsCode\learn\learn-claude-code\s10_system_prompt\README.md`。
+实现参考：`D:\vsCode\learn\learn-claude-code\s11_error_recovery\README.md`。
 
-## 三个核心方法
-
-实现位于 `SystemPromptAssembler`：
-
-### `update_content`
-
-从真实运行状态生成不可变的 `PromptContent`：
-
-- 当前 Agent 角色：Parent 或 Subagent
-- 规范化工作目录
-- `ToolRegistry` 中实际注册的工具名称
-- 当前可发现的 Skill 名称和描述
-- 当前 `.memory/MEMORY.md` 索引
-- Context Compact 是否启用
-
-它不会扫描用户消息关键词来猜测能力。例如只有真正注册了 `task`，才会加入委派 Section；只有 Memory 索引真实存在且非空，才会加入 Memory Section。
-
-### `assemble_system_prompt`
-
-按照稳定顺序选择并拼接 Section：
+## 调用位置
 
 ```text
-identity
-workspace
-available_tools
-evidence（存在代码读取工具时）
-planning（存在 todo_write 时）
-delegation（存在 task 时）
-file_mutations（存在文件变更工具时）
-skills（存在 load_skills 且有 Skill 时）
-memory（MEMORY.md 非空时）
-context_compact（压缩启用时）
+Runtime System Prompt
+  → L3 → L1 → L2 → 可选 L4
+  → 注入相关 Memory
+  → try: 调用业务 LLM
+      ├─ 成功但 max_tokens
+      ├─ prompt_too_long / 413
+      ├─ 429 / 529
+      └─ 其他错误直接上抛
 ```
 
-Section 使用空行分隔，彼此独立维护。工具列表来自实际注册表，不在 prompt 中维护第二份容易过期的静态清单。
+Memory 的选择结果每个用户请求只计算一次。瞬态重试、max_tokens 升级和 reactiveCompact 重试都会重新把同一批 Memory 注入当前请求副本，但不会污染或重复写入标准消息历史。
 
-Parent 与 Subagent 共用组装机制，但 identity 和真实工具集不同：
+## 路径一：`max_tokens`
 
-- Parent 可以按注册状态获得 Todo、委派和文件审批说明。
-- Subagent 只会看到其只读工具、Skill Loading 和不可递归身份。
+DeepSeek 的 `finish_reason=length` 会被统一映射为 `stopReason=max_tokens`。
 
-### `get_system_prompt`
+恢复顺序：
 
-使用 `PromptContent` 的确定性 JSON 序列化作为缓存键：
+1. 初始输出预算为 8,000。
+2. 第一次截断时，不把短输出写入消息，直接升级到 64,000 并重试同一请求。
+3. 64K 仍截断时，保存当前截断正文。
+4. 注入续写提示，要求直接从中断位置继续，不道歉、不复述。
+5. 最多续写 3 次。
+6. 达到上限后停止恢复，返回已安全收集的所有片段。
 
-- Context 相同：直接返回缓存字符串。
-- 工具注册变化：新键，重新组装。
-- Skill 名称或描述变化：新键，重新组装。
-- `MEMORY.md` 内容变化：新键，重新组装。
-- 最多保留 64 个最近使用的 prompt。
+续写轮次仍会重新运行 Runtime Prompt、Context Compact 和 Memory Loading。恢复轮次可以安全扩展原模型步骤上限，确保最多 3 次续写不会因为正好触及步骤边界而被提前截断。
 
-缓存只避免进程内重复拼接，不冒充模型服务的 API prompt cache。Section 顺序保持稳定，也为后续 API 级缓存边界保留条件。
+## 路径二：`prompt_too_long`
 
-## Agent Loop
+只有业务 LLM 实际返回以下错误时触发：
 
-每个新用户请求先运行一次：
+- HTTP 413
+- `prompt_too_long`
+- `prompt too long`
+- context-length 错误
+
+恢复动作：
+
+1. 对标准消息执行一次 `reactiveCompact`。
+2. 重新注入相关 Memory。
+3. 重试业务 LLM。
+4. 如果仍然超长，直接上抛，不进行第二次 reactiveCompact。
+
+L4 摘要调用自身失败不会触发这条路径，保持 S08 已确定的边界。
+
+## 路径三：429 / 529
+
+429 Rate Limit 和 529 Overloaded 使用指数退避：
 
 ```text
-update_content
-  → get_system_prompt
-  → 创建首条 system 消息
+base = min(500ms × 2^attempt, 32000ms)
+delay = base + random(0 .. base × 25%)
 ```
 
-每个工具轮次进入下一次业务模型调用前会再次运行：
+- 最多重试 10 次。
+- 服务端返回数值型 `Retry-After` 时优先使用。
+- 429 会清零连续 529 计数。
+- 任意成功响应会清零连续 529 计数。
+- 其他 4xx、5xx 或本地错误不会误重试。
 
-```text
-update_content
-  → get_system_prompt
-      → 状态不变：cache hit
-      → 状态变化：assemble_system_prompt
-  → 更新首条 system 消息
-  → S08 Context Compact
-  → S09 Memory 压缩后注入
-  → 业务 LLM
+### 529 备用模型
+
+可选配置：
+
+```dotenv
+DEEPSEEK_FALLBACK_MODEL=
 ```
 
-因此同一轮中的多数模型调用只做轻量状态读取并命中缓存；如果工具、Skill 或 Memory 索引真的变化，下一次调用立即获得新 prompt。
+连续 3 次 529 且配置了备用模型后，后续尝试切换到备用模型。未配置时继续使用主模型完成剩余有限重试，不会自行猜测模型名称。
 
-## 分段内容
+## Recovery State
 
-### 始终加载
+每次 Parent Agent 或 Subagent 运行都会创建独立状态：
 
-- `identity`：角色、证据原则、回答边界
-- `workspace`：实际项目根目录
-- `available_tools`：实际注册工具
+- 当前 `maxTokens`
+- 是否完成 8K→64K 升级
+- 已使用的续写次数
+- 是否执行过 reactiveCompact
+- 连续 529 次数
+- 当前主模型或备用模型
 
-### 按真实状态加载
-
-- `evidence`
-- `planning`
-- `delegation`
-- `file_mutations`
-- `skills`
-- `memory`
-- `context_compact`
-
-没有 Memory 时，不会加入“当前没有 Memory”的空 Section；没有 Skill 或 `load_skills` 未注册时，也不会加入 Skill Section。
+不同请求之间不会共享错误次数，也不会让一次限流污染下一次任务。
 
 ## Harness 可见性
 
-运行轨迹包含：
+父 Agent 轨迹新增 `recovery` 事件：
 
-- 初次 `Build System · Runtime Assembly`
-- 每个模型步骤的 `System Prompt · Step N`
-- 当前加载的 Section 列表
-- 缓存 hit、miss 和 entry 数量
+- `max_tokens` 的升级、续写和耗尽
+- `prompt_too_long → reactiveCompact`
+- 429/529 当前尝试次数和等待毫秒
+- 连续 529 后的备用模型切换
+
+Subagent 在终端打印同样的恢复状态。
 
 健康接口：
 
 ```json
 {
-  "stage": "s10-system-prompt",
-  "systemPrompt": {
-    "runtimeAssembly": true,
-    "conditionalSections": true,
-    "cache": {
-      "hits": 0,
-      "misses": 0,
-      "entries": 0
-    }
+  "stage": "s11-error-recovery",
+  "errorRecovery": {
+    "enabled": true,
+    "maxTokensEscalation": "8000->64000",
+    "promptTooLongRetries": 1,
+    "transientRetries": 10,
+    "fallbackModelConfigured": false
   }
 }
 ```
 
 ## 保留能力
 
-- S03：文件创建、修改、删除与三道权限闸门
+- S03：文件变更与三道权限闸门
 - S04：完整 Agent Cycle Hooks
-- S05：进程内 TodoWrite 与三轮提醒
+- S05：TodoWrite 与三轮提醒
 - S06：只读、不可递归 Subagent
 - S07：按需加载完整 Skill
-- S08：分层上下文压缩与业务 LLM 超长应急处理
-- S09：持久 Memory 的索引、智能加载、提取和整理
-- S10：System Prompt 分段、按需拼接和确定性缓存
+- S08：分层上下文压缩与 reactiveCompact
+- S09：持久 Memory
+- S10：运行时 System Prompt 组装和缓存
+- S11：max_tokens、prompt_too_long、429/529 三路径恢复
 
 ## 启动与验证
 

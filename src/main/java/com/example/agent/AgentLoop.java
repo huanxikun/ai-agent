@@ -6,6 +6,7 @@ import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.memory.MemorySystem;
 import com.example.agent.prompts.SystemPromptAssembler;
+import com.example.agent.recovery.ErrorRecovery;
 import com.example.agent.todos.TodoNagReminder;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.ToolRegistry;
@@ -21,7 +22,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S10 Agent Cycle：system prompt 按真实状态分段组装，并复用确定性缓存。
+ * S11 Agent Cycle：在 compress + memory load 后对业务 LLM 分类恢复。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -33,6 +34,7 @@ public final class AgentLoop {
     private final ContextCompactor contextCompactor;
     private final MemorySystem memorySystem;
     private final SystemPromptAssembler systemPromptAssembler;
+    private final ErrorRecovery errorRecovery;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -43,6 +45,7 @@ public final class AgentLoop {
             ContextCompactor contextCompactor,
             MemorySystem memorySystem,
             SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
             ObjectMapper json
     ) {
         this.model = model;
@@ -52,6 +55,7 @@ public final class AgentLoop {
         this.contextCompactor = contextCompactor;
         this.memorySystem = memorySystem;
         this.systemPromptAssembler = systemPromptAssembler;
+        this.errorRecovery = errorRecovery;
         this.json = json;
     }
 
@@ -66,6 +70,9 @@ public final class AgentLoop {
         boolean reminderGraceTurnUsed = false;
         List<Map<String, Object>> trace = new ArrayList<>();
         List<JsonNode> approvals = new ArrayList<>();
+        ErrorRecovery.RecoveryState recoveryState =
+                errorRecovery.newState();
+        StringBuilder recoveredOutput = new StringBuilder();
 
         try {
             SystemPromptAssembler.PromptContent initialContent =
@@ -118,6 +125,7 @@ public final class AgentLoop {
                     .put("role", "user")
                     .put("content", userMessage);
 
+            stepLoop:
             for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
                 refreshSystemPrompt(messages, step, trace);
@@ -125,26 +133,82 @@ public final class AgentLoop {
                 trace.add(event("model", "模型调用 · Step " + step, "模型正在判断下一步"));
 
                 DeepSeekClient.ModelResponse response;
-                try {
-                    response = model.createResponse(
-                            requestMessages(messages, loadedMemories),
-                            tools.definitions()
+                while (true) {
+                    response = callBusinessModel(
+                            messages,
+                            loadedMemories,
+                            recoveryState,
+                            trace,
+                            step
                     );
-                } catch (Exception exception) {
-                    if (contextCompactor == null
-                            || !DeepSeekClient.isPromptTooLong(exception)) {
-                        throw exception;
-                    }
-                    ContextCompactor.CompactReport reactive =
-                            contextCompactor.reactiveCompact(messages);
-                    trace.add(compactEvent(
-                            "reactiveCompact",
-                            step,
-                            reactive
+                    if (!"max_tokens".equals(response.stopReason())) break;
+
+                    ErrorRecovery.MaxTokensAction action =
+                            errorRecovery.handleMaxTokens(recoveryState);
+                    trace.add(event(
+                            "recovery",
+                            "Error Recovery · max_tokens",
+                            "action=" + action
+                                    + "，maxTokens="
+                                    + recoveryState.maxTokens()
+                                    + "，continuations="
+                                    + recoveryState.continuations()
                     ));
-                    response = model.createResponse(
-                            requestMessages(messages, loadedMemories),
-                            tools.definitions()
+                    if (action
+                            == ErrorRecovery.MaxTokensAction.ESCALATE_AND_RETRY) {
+                        continue;
+                    }
+
+                    ObjectNode truncated = truncatedAssistant(response);
+                    messages.add(truncated);
+                    memoryTranscript.add(truncated.deepCopy());
+                    appendRecovered(recoveredOutput, response.text());
+                    if (action
+                            == ErrorRecovery.MaxTokensAction.APPEND_AND_CONTINUE) {
+                        if (step == stepLimit) stepLimit++;
+                        messages.addObject()
+                                .put("role", "user")
+                                .put(
+                                        "content",
+                                        ErrorRecovery.CONTINUATION_PROMPT
+                                );
+                        memoryTranscript.addObject()
+                                .put("role", "user")
+                                .put(
+                                        "content",
+                                        ErrorRecovery.CONTINUATION_PROMPT
+                                );
+                        continue stepLoop;
+                    }
+
+                    String exhaustedText = recoveredOutput.toString().trim();
+                    if (exhaustedText.isEmpty()) {
+                        exhaustedText = "[输出达到 token 恢复上限]";
+                    }
+                    trace.add(event(
+                            "recovery",
+                            "Error Recovery · max_tokens exhausted",
+                            "已完成 1 次升级与 "
+                                    + ErrorRecovery.MAX_CONTINUATIONS
+                                    + " 次续写"
+                    ));
+                    extractMemories(memoryTranscript, trace);
+                    stopTriggered = true;
+                    triggerStop(
+                            runId,
+                            userMessage,
+                            step,
+                            "max_tokens_recovery_exhausted",
+                            null,
+                            trace
+                    );
+                    return new RunResult(
+                            exhaustedText,
+                            step,
+                            toolCalls,
+                            System.currentTimeMillis() - startedAt,
+                            trace,
+                            approvals
                     );
                 }
                 messages.add(response.assistantMessage());
@@ -169,8 +233,11 @@ public final class AgentLoop {
                     extractMemories(memoryTranscript, trace);
                     stopTriggered = true;
                     triggerStop(runId, userMessage, step, "completed", null, trace);
+                    String finalText = recoveredOutput.isEmpty()
+                            ? response.text()
+                            : recoveredOutput + "\n" + response.text();
                     return new RunResult(
-                            response.text(),
+                            finalText.trim(),
                             step,
                             toolCalls,
                             System.currentTimeMillis() - startedAt,
@@ -268,6 +335,89 @@ public final class AgentLoop {
             }
             throw exception;
         }
+    }
+
+    private DeepSeekClient.ModelResponse callBusinessModel(
+            ArrayNode messages,
+            MemorySystem.LoadedMemories loadedMemories,
+            ErrorRecovery.RecoveryState state,
+            List<Map<String, Object>> trace,
+            int step
+    ) throws Exception {
+        try {
+            return withTransientRetry(
+                    messages,
+                    loadedMemories,
+                    state,
+                    trace,
+                    step
+            );
+        } catch (Exception exception) {
+            if (contextCompactor == null
+                    || !DeepSeekClient.isPromptTooLong(exception)
+                    || state.reactiveCompactAttempted()) {
+                throw exception;
+            }
+            ContextCompactor.CompactReport reactive =
+                    contextCompactor.reactiveCompact(messages);
+            state.markReactiveCompactAttempted();
+            trace.add(compactEvent(
+                    "prompt_too_long → reactiveCompact",
+                    step,
+                    reactive
+            ));
+            return withTransientRetry(
+                    messages,
+                    loadedMemories,
+                    state,
+                    trace,
+                    step
+            );
+        }
+    }
+
+    private DeepSeekClient.ModelResponse withTransientRetry(
+            ArrayNode messages,
+            MemorySystem.LoadedMemories loadedMemories,
+            ErrorRecovery.RecoveryState state,
+            List<Map<String, Object>> trace,
+            int step
+    ) throws Exception {
+        return errorRecovery.withRetry(
+                (maxTokens, requestedModel) -> model.createResponse(
+                        requestMessages(messages, loadedMemories),
+                        tools.definitions(),
+                        maxTokens,
+                        requestedModel
+                ),
+                state,
+                recoveryEvent -> trace.add(event(
+                        "recovery",
+                        "Error Recovery · " + recoveryEvent.kind()
+                                + " · Step " + step,
+                        "attempt=" + recoveryEvent.attempt()
+                                + "，delayMs=" + recoveryEvent.delayMs()
+                                + "，" + recoveryEvent.detail()
+                ))
+        );
+    }
+
+    private ObjectNode truncatedAssistant(
+            DeepSeekClient.ModelResponse response
+    ) {
+        ObjectNode message = json.createObjectNode();
+        message.put("role", "assistant");
+        message.put("content", response.text());
+        return message;
+    }
+
+    private void appendRecovered(
+            StringBuilder recoveredOutput,
+            String text
+    ) {
+        if (text == null || text.isBlank()) return;
+        if (!recoveredOutput.isEmpty()) recoveredOutput.append('\n');
+        recoveredOutput.append(text);
     }
 
     private SystemPromptAssembler requirePromptAssembler() {

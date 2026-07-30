@@ -10,6 +10,7 @@ import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
 import com.example.agent.prompts.SystemPromptAssembler;
+import com.example.agent.recovery.ErrorRecovery;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
@@ -72,7 +73,7 @@ class SubagentTest {
 
         AtomicInteger modelCalls = new AtomicInteger();
         Subagent subagent = new Subagent(
-                (messages, definitions) -> {
+                (messages, definitions, maxTokens, model) -> {
                     int call = modelCalls.getAndIncrement();
                     if (call == 0) {
                         assertEquals(2, messages.size());
@@ -102,6 +103,7 @@ class SubagentTest {
                 hooks,
                 null,
                 runtimePrompt(childTools, null),
+                testRecovery(),
                 JSON
         );
 
@@ -123,7 +125,7 @@ class SubagentTest {
         HookRegistry hooks = configuredHooks();
         ToolRegistry childTools = readOnlyTools(hooks);
         Subagent subagent = new Subagent(
-                (messages, definitions) -> toolCall(
+                (messages, definitions, maxTokens, model) -> toolCall(
                         "recursive-1",
                         "task",
                         JSON.createObjectNode()
@@ -134,6 +136,7 @@ class SubagentTest {
                 hooks,
                 null,
                 runtimePrompt(childTools, null),
+                testRecovery(),
                 JSON
         );
 
@@ -209,7 +212,7 @@ class SubagentTest {
 
         AtomicInteger modelCalls = new AtomicInteger();
         Subagent subagent = new Subagent(
-                (messages, definitions) -> {
+                (messages, definitions, maxTokens, model) -> {
                     int call = modelCalls.getAndIncrement();
                     if (call == 0) {
                         assertTrue(
@@ -241,6 +244,7 @@ class SubagentTest {
                 hooks,
                 null,
                 runtimePrompt(childTools, catalog),
+                testRecovery(),
                 JSON
         );
 
@@ -268,7 +272,7 @@ class SubagentTest {
         );
         AtomicInteger calls = new AtomicInteger();
         Subagent subagent = new Subagent(
-                (messages, definitions) -> {
+                (messages, definitions, maxTokens, model) -> {
                     if (calls.getAndIncrement() == 0) {
                         throw new DeepSeekClient.DeepSeekException(
                                 413,
@@ -287,6 +291,7 @@ class SubagentTest {
                 hooks,
                 compactor,
                 runtimePrompt(childTools, null),
+                testRecovery(),
                 JSON
         );
 
@@ -299,6 +304,52 @@ class SubagentTest {
         assertEquals(2, calls.get());
         assertEquals(1, result.steps());
         assertTrue(result.text().contains("应急压缩"));
+    }
+
+    @Test
+    void childEscalatesMaxTokensThenContinuesWithoutLosingPartialText()
+            throws Exception {
+        HookRegistry hooks = configuredHooks();
+        ToolRegistry childTools = readOnlyTools(hooks);
+        AtomicInteger calls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions, maxTokens, model) -> {
+                    int call = calls.getAndIncrement();
+                    if (call == 0) {
+                        assertEquals(8_000, maxTokens);
+                        return maxTokensResponse("discarded-short-output");
+                    }
+                    if (call == 1) {
+                        assertEquals(64_000, maxTokens);
+                        return maxTokensResponse("kept-partial-output");
+                    }
+                    assertEquals(64_000, maxTokens);
+                    assertEquals(
+                            ErrorRecovery.CONTINUATION_PROMPT,
+                            messages.path(messages.size() - 1)
+                                    .path("content")
+                                    .asText()
+                    );
+                    return finalResponse("continued-output");
+                },
+                childTools,
+                hooks,
+                null,
+                runtimePrompt(childTools, null),
+                testRecovery(),
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "输出恢复",
+                "生成长内容",
+                "parent"
+        );
+
+        assertEquals(3, calls.get());
+        assertTrue(result.text().contains("kept-partial-output"));
+        assertTrue(result.text().contains("continued-output"));
+        assertFalse(result.text().contains("discarded-short-output"));
     }
 
     private HookRegistry configuredHooks() throws Exception {
@@ -337,6 +388,10 @@ class SubagentTest {
         );
     }
 
+    private ErrorRecovery testRecovery() {
+        return new ErrorRecovery("primary-model", "");
+    }
+
     private DeepSeekClient.ModelResponse toolCall(
             String callId,
             String name,
@@ -364,5 +419,17 @@ class SubagentTest {
         message.put("role", "assistant");
         message.put("content", text);
         return new DeepSeekClient.ModelResponse(text, List.of(), message);
+    }
+
+    private DeepSeekClient.ModelResponse maxTokensResponse(String text) {
+        ObjectNode message = JSON.createObjectNode();
+        message.put("role", "assistant");
+        message.put("content", text);
+        return new DeepSeekClient.ModelResponse(
+                text,
+                List.of(),
+                message,
+                "max_tokens"
+        );
     }
 }
