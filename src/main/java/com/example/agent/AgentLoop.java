@@ -3,6 +3,8 @@ package com.example.agent;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
+import com.example.agent.todos.TodoNagReminder;
+import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,7 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S04 Agent Cycle：UserPromptScript -> PreToolUse -> PostToolUse -> Stop。
+ * S05 Agent Cycle：在 S04 Hooks 上加入 TodoWrite 和三轮 Nag Reminder。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -26,6 +28,8 @@ public final class AgentLoop {
 
             回答代码问题前，先使用工具检查项目中的真实代码。
             使用 list_files 了解结构，使用 search_code 定位关键词，使用 read_file 阅读实现。
+            对多步骤任务，先调用 todo_write 建立完整列表；推进任务时持续更新状态。
+            Todo 状态只能是 pending、in_progress 或 completed，同时最多一个 in_progress。
             用户明确要求创建文件时使用 create_file，修改现有文件时使用 edit_file，
             明确要求删除文件时使用 delete_file。
 
@@ -40,17 +44,20 @@ public final class AgentLoop {
     private final DeepSeekClient model;
     private final ToolRegistry tools;
     private final HookRegistry hooks;
+    private final TodoStore todoStore;
     private final ObjectMapper json;
 
     public AgentLoop(
             DeepSeekClient model,
             ToolRegistry tools,
             HookRegistry hooks,
+            TodoStore todoStore,
             ObjectMapper json
     ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
+        this.todoStore = todoStore;
         this.json = json;
     }
 
@@ -60,6 +67,9 @@ public final class AgentLoop {
         int toolCalls = 0;
         int lastStep = 0;
         boolean stopTriggered = false;
+        TodoNagReminder todoNag = new TodoNagReminder();
+        int stepLimit = MAX_STEPS;
+        boolean reminderGraceTurnUsed = false;
         List<Map<String, Object>> trace = new ArrayList<>();
         List<JsonNode> approvals = new ArrayList<>();
 
@@ -82,7 +92,7 @@ public final class AgentLoop {
                     .put("role", "user")
                     .put("content", userMessage);
 
-            for (int step = 1; step <= MAX_STEPS; step++) {
+            for (int step = 1; step <= stepLimit; step++) {
                 lastStep = step;
                 trace.add(event("model", "模型调用 · Step " + step, "模型正在判断下一步"));
 
@@ -92,8 +102,19 @@ public final class AgentLoop {
                                 tools.definitions()
                         );
                 messages.add(response.assistantMessage());
+                boolean calledTodoWrite = response.toolCalls().stream()
+                        .anyMatch(call -> "todo_write".equals(call.name()));
+                boolean nagRequired = todoNag.recordRound(calledTodoWrite);
 
                 if (response.toolCalls().isEmpty()) {
+                    if (nagRequired) {
+                        if (step == stepLimit && !reminderGraceTurnUsed) {
+                            stepLimit++;
+                            reminderGraceTurnUsed = true;
+                        }
+                        injectTodoReminder(messages, trace, todoNag);
+                        continue;
+                    }
                     if (response.text().isBlank()) {
                         throw new IllegalStateException("模型没有返回文本或工具调用");
                     }
@@ -168,6 +189,14 @@ public final class AgentLoop {
                     item.put("tool_call_id", call.callId());
                     item.put("content", output);
                 }
+
+                if (nagRequired) {
+                    if (step == stepLimit && !reminderGraceTurnUsed) {
+                        stepLimit++;
+                        reminderGraceTurnUsed = true;
+                    }
+                    injectTodoReminder(messages, trace, todoNag);
+                }
             }
 
             throw new IllegalStateException(
@@ -190,6 +219,22 @@ public final class AgentLoop {
             }
             throw exception;
         }
+    }
+
+    private void injectTodoReminder(
+            ArrayNode messages,
+            List<Map<String, Object>> trace,
+            TodoNagReminder todoNag
+    ) {
+        String reminder = todoNag.message(todoStore.snapshot());
+        messages.addObject()
+                .put("role", "system")
+                .put("content", reminder);
+        trace.add(event(
+                "nag",
+                "Nag Reminder · TodoWrite",
+                "连续 3 轮未调用 todo_write，已向模型上下文注入提醒"
+        ));
     }
 
     private void triggerStop(

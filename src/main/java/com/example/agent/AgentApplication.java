@@ -6,7 +6,9 @@ import com.example.agent.hooks.DefaultAgentHooks;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
+import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
+import com.example.agent.tools.ToolHandlers;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,14 +49,17 @@ public final class AgentApplication {
         HookRegistry hooks = new HookRegistry();
         DefaultAgentHooks.register_hooks(hooks);
         PermissionHooks.register_hooks(hooks, permissions);
+        TodoStore todoStore = new TodoStore();
 
         ToolRegistry tools = new ToolRegistry(JSON, hooks);
         new CodeTools(projectRoot, approvals, hooks, JSON).registerInto(tools);
+        new ToolHandlers(todoStore, JSON).registerInto(tools);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
                 tools,
                 hooks,
+                todoStore,
                 JSON
         );
 
@@ -69,7 +74,8 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s04-hooks",
+                    "stage", "s05-todowrite",
+                    "todos", todoStore.summary(),
                     "hooks", Map.of(
                             HookEvent.USER_PROMPT_SCRIPT.displayName(),
                             hooks.registeredCount(HookEvent.USER_PROMPT_SCRIPT),

@@ -162,9 +162,12 @@ button { color: inherit; }
 .messages {
   flex: 1;
   min-height: 0;
-  width: min(760px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 40px 0 148px;
+  width: 100%;
+  margin: 0;
+  padding:
+    40px
+    max(28px, calc((100% - 760px) / 2))
+    148px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -219,9 +222,10 @@ button { color: inherit; }
 .composer {
   position: absolute;
   z-index: 2;
-  left: 50%;
+  left: auto;
+  right: 18px;
   bottom: 28px;
-  transform: translateX(-50%);
+  transform: none;
   width: min(760px, calc(100% - 48px));
   padding: 10px 10px 10px 18px;
   display: flex;
@@ -373,6 +377,13 @@ textarea::placeholder { color: #6e7470; }
   border-color: #aa8cff;
   box-shadow: 0 0 10px rgba(170, 140, 255, 0.3);
 }
+
+.trace-item.nag .trace-node {
+  border-color: #ffb454;
+  box-shadow: 0 0 10px rgba(255, 180, 84, 0.35);
+}
+
+.trace-item.nag .trace-detail { color: #e8bd82; }
 
 .trace-item.rejected .trace-node { border-color: var(--danger); }
 
@@ -550,7 +561,15 @@ textarea::placeholder { color: #6e7470; }
   .intro h1 { font-size: 43px; }
   .suggestions { grid-template-columns: 1fr; }
   .suggestions button { min-height: 58px; }
-  .messages, .composer { width: calc(100% - 28px); }
+  .messages {
+    width: 100%;
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+  .composer {
+    right: 14px;
+    width: calc(100% - 28px);
+  }
   .trace-panel { padding: 20px 16px; }
   .composer button span { display: none; }
 }
