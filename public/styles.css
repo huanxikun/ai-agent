@@ -24,7 +24,8 @@ body {
 
 body {
   background:
-    radial-gradient(circle at 18% 0%, rgba(216, 255, 101, 0.07), transparent 28rem),
+    radial-gradient(circle at 18% 0%, rgba(216, 255, 101, 0.08), transparent 28rem),
+    radial-gradient(circle at 86% 12%, rgba(97, 173, 255, 0.1), transparent 24rem),
     var(--bg);
   color: var(--text);
 }
@@ -46,6 +47,8 @@ button { color: inherit; }
   justify-content: space-between;
   padding: 0 32px;
   border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(17, 19, 19, 0.96), rgba(17, 19, 19, 0.82));
 }
 
 .brand {
@@ -128,6 +131,22 @@ button { color: inherit; }
   color: var(--muted);
   font-size: 16px;
   line-height: 1.7;
+}
+
+.feature-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.feature-strip span {
+  padding: 8px 12px;
+  border: 1px solid #33413d;
+  background: rgba(16, 20, 20, 0.72);
+  color: #d6ddd8;
+  font: 11px/1 ui-monospace, monospace;
+  letter-spacing: 0.06em;
 }
 
 .suggestions {
@@ -293,6 +312,13 @@ textarea::placeholder { color: #6e7470; }
   font-weight: 570;
 }
 
+.trace-subtitle {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .icon-button {
   width: 34px;
   height: 34px;
@@ -376,6 +402,16 @@ textarea::placeholder { color: #6e7470; }
 .trace-item.hook .trace-node {
   border-color: #aa8cff;
   box-shadow: 0 0 10px rgba(170, 140, 255, 0.3);
+}
+
+.trace-item.background .trace-node {
+  border-color: #73c3ff;
+  box-shadow: 0 0 10px rgba(115, 195, 255, 0.35);
+}
+
+.trace-item.background .trace-detail {
+  color: #b7dcff;
+  background: #0c1217;
 }
 
 .trace-item.nag .trace-node {
@@ -559,6 +595,7 @@ textarea::placeholder { color: #6e7470; }
   .topbar { padding: 0 18px; }
   .intro { width: calc(100% - 36px); padding-top: 30px; }
   .intro h1 { font-size: 43px; }
+  .feature-strip { gap: 8px; }
   .suggestions { grid-template-columns: 1fr; }
   .suggestions button { min-height: 58px; }
   .messages {

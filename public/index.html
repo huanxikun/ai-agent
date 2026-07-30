@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="支持跨会话持久任务图的代码 Agent" />
-    <title>My Agent · S12 Task System</title>
+    <meta name="description" content="支持后台任务、持久任务与长链路代码研究的代码 Agent" />
+    <title>My Agent · S13 Background Tasks</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -14,7 +14,7 @@
           <span class="brand-mark">A</span>
           <span>
             <strong>My Agent</strong>
-            <small>s12 · Task System</small>
+            <small>s13 · Background Tasks</small>
           </span>
         </a>
         <div class="status">
@@ -26,9 +26,14 @@
       <main class="workspace">
         <section class="chat-panel">
           <div class="intro" id="intro">
-            <div class="eyebrow">STEP 12 · TASK SYSTEM</div>
-            <h1>大目标拆小<br />进度跨会话保留</h1>
-            <p>持久任务、依赖解锁与任务认领，和当前会话的 Todo 清单各司其职。</p>
+            <div class="eyebrow">STEP 13 · BACKGROUND TASKS</div>
+            <h1>慢任务丢后台<br />主对话继续推进</h1>
+            <p>现在支持后台只读 Subagent、持久任务图，以及更深层级的源码读取，后端 `src` 内容可以直接被发现与分析。</p>
+            <div class="feature-strip" aria-label="S13 能力概览">
+              <span>后台任务通知</span>
+              <span>更深源码遍历</span>
+              <span>可配置长链路</span>
+            </div>
           </div>
           <div class="messages" id="messages" aria-live="polite"></div>
           <form class="composer" id="chatForm">
@@ -48,14 +53,15 @@
         <aside class="trace-panel">
           <div class="trace-header">
             <div>
-              <span class="eyebrow">LIVE TRACE</span>
+              <span class="eyebrow">LIVE TRACE · S13</span>
               <h2>Harness 运行轨迹</h2>
+              <p class="trace-subtitle">查看后台任务启动、完成通知与工具执行链路。</p>
             </div>
             <button class="icon-button" id="resetButton" title="重置会话">↻</button>
           </div>
           <div class="trace-empty" id="traceEmpty">
             <div class="pulse-ring"><span></span></div>
-            <p>发送一条消息后，这里会显示模型调用、工具执行和停止条件。</p>
+            <p>发送一条消息后，这里会显示模型调用、后台任务通知、工具执行和停止条件。</p>
           </div>
           <ol class="trace-list" id="traceList"></ol>
           <div class="trace-summary" id="traceSummary">

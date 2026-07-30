@@ -189,6 +189,26 @@ class PermissionFlowTest {
         assertEquals(1, executions.get());
     }
 
+    @Test
+    void listFilesDefaultDepthIncludesDeepBackendSourceTree() throws Exception {
+        Path backend = projectRoot.resolve(
+                "src/main/java/com/example/agent/AgentApplication.java"
+        );
+        Files.createDirectories(backend.getParent());
+        Files.writeString(backend, "class AgentApplication {}");
+
+        String output = executeTool(
+                "list_files",
+                JSON.createObjectNode()
+        );
+
+        assertTrue(output.contains(
+                "src\\main\\java\\com\\example\\agent\\AgentApplication.java"
+        ) || output.contains(
+                "src/main/java/com/example/agent/AgentApplication.java"
+        ));
+    }
+
     private ObjectNode editArguments(String path, String oldText, String newText) {
         return JSON.createObjectNode()
                 .put("path", path)

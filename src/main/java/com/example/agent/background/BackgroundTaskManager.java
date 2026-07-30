@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * later notification when they complete.
  */
 public final class BackgroundTaskManager implements AutoCloseable {
-    private static final int MAX_NOTIFICATION_SUMMARY = 200;
+    private static final int MAX_TASK_SUMMARY = 200;
     private static final AtomicInteger THREAD_COUNTER = new AtomicInteger();
 
     private final ExecutorService executor;
@@ -60,15 +60,20 @@ public final class BackgroundTaskManager implements AutoCloseable {
                 normalizeSummary(summary)
         );
         tasks.put(backgroundId, task);
-        executor.submit(() -> {
-            try {
-                task.complete(job.call());
-            } catch (Exception exception) {
-                task.fail(exception);
-            } finally {
-                completedIds.offer(backgroundId);
-            }
-        });
+        try {
+            executor.submit(() -> {
+                try {
+                    task.complete(job.call());
+                } catch (Exception exception) {
+                    task.fail(exception);
+                } finally {
+                    completedIds.offer(backgroundId);
+                }
+            });
+        } catch (RuntimeException exception) {
+            tasks.remove(backgroundId, task);
+            throw exception;
+        }
         return new BackgroundStart(
                 backgroundId,
                 toolName,
@@ -112,17 +117,18 @@ public final class BackgroundTaskManager implements AutoCloseable {
 
     private String normalizeSummary(String summary) {
         String normalized = summary == null ? "" : summary.trim();
-        return normalized.isEmpty() ? "后台任务" : normalized;
+        return truncate(
+                normalized.isEmpty() ? "后台任务" : normalized,
+                MAX_TASK_SUMMARY
+        );
     }
 
     private String summarize(String output, Throwable error) {
         if (error != null) {
             String message = error.getMessage();
-            return truncate(
-                    message == null || message.isBlank()
-                            ? error.getClass().getSimpleName()
-                            : message
-            );
+            return message == null || message.isBlank()
+                    ? error.getClass().getSimpleName()
+                    : message;
         }
         if (output == null || output.isBlank()) return "(empty output)";
 
@@ -130,21 +136,17 @@ public final class BackgroundTaskManager implements AutoCloseable {
             JsonNode node = json.readTree(output);
             for (String field : List.of("message", "result", "status")) {
                 String text = node.path(field).asText("").trim();
-                if (!text.isEmpty()) return truncate(singleLine(text));
+                if (!text.isEmpty()) return text;
             }
         } catch (Exception ignored) {
             // Fall back to the raw tool output if it is not JSON.
         }
-        return truncate(singleLine(output));
+        return output;
     }
 
-    private String truncate(String value) {
-        if (value.length() <= MAX_NOTIFICATION_SUMMARY) return value;
-        return value.substring(0, MAX_NOTIFICATION_SUMMARY) + "...";
-    }
-
-    private String singleLine(String value) {
-        return value.replaceAll("\\s+", " ").trim();
+    private String truncate(String value, int maxLength) {
+        if (value.length() <= maxLength) return value;
+        return value.substring(0, maxLength) + "...";
     }
 
     private final class BackgroundTask {

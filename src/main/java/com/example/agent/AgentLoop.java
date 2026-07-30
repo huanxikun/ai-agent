@@ -27,7 +27,7 @@ import java.util.UUID;
  * S11 Agent Cycle：在 compress + memory load 后对业务 LLM 分类恢复。
  */
 public final class AgentLoop {
-    private static final int MAX_STEPS = 8;
+    public static final int DEFAULT_MAX_STEPS = 32;
 
     private final DeepSeekClient model;
     private final ToolRegistry tools;
@@ -38,6 +38,7 @@ public final class AgentLoop {
     private final SystemPromptAssembler systemPromptAssembler;
     private final ErrorRecovery errorRecovery;
     private final BackgroundTaskManager backgroundTasks;
+    private final int maxSteps;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -52,6 +53,34 @@ public final class AgentLoop {
             BackgroundTaskManager backgroundTasks,
             ObjectMapper json
     ) {
+        this(
+                model,
+                tools,
+                hooks,
+                todoStore,
+                contextCompactor,
+                memorySystem,
+                systemPromptAssembler,
+                errorRecovery,
+                backgroundTasks,
+                DEFAULT_MAX_STEPS,
+                json
+        );
+    }
+
+    public AgentLoop(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            TodoStore todoStore,
+            ContextCompactor contextCompactor,
+            MemorySystem memorySystem,
+            SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
+            BackgroundTaskManager backgroundTasks,
+            int maxSteps,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
@@ -61,6 +90,7 @@ public final class AgentLoop {
         this.systemPromptAssembler = systemPromptAssembler;
         this.errorRecovery = errorRecovery;
         this.backgroundTasks = backgroundTasks;
+        this.maxSteps = normalizeMaxSteps(maxSteps);
         this.json = json;
     }
 
@@ -71,7 +101,7 @@ public final class AgentLoop {
         int lastStep = 0;
         boolean stopTriggered = false;
         TodoNagReminder todoNag = new TodoNagReminder();
-        int stepLimit = MAX_STEPS;
+        int stepLimit = maxSteps;
         boolean reminderGraceTurnUsed = false;
         List<Map<String, Object>> trace = new ArrayList<>();
         List<JsonNode> approvals = new ArrayList<>();
@@ -228,7 +258,8 @@ public final class AgentLoop {
 
                 if (response.toolCalls().isEmpty()) {
                     if (nagRequired) {
-                        if (step == stepLimit && !reminderGraceTurnUsed) {
+                        if (step == stepLimit
+                                && !reminderGraceTurnUsed) {
                             stepLimit++;
                             reminderGraceTurnUsed = true;
                         }
@@ -342,7 +373,8 @@ public final class AgentLoop {
                 injectBackgroundNotifications(messages, memoryTranscript, trace);
 
                 if (nagRequired) {
-                    if (step == stepLimit && !reminderGraceTurnUsed) {
+                    if (step == stepLimit
+                            && !reminderGraceTurnUsed) {
                         stepLimit++;
                         reminderGraceTurnUsed = true;
                     }
@@ -351,7 +383,7 @@ public final class AgentLoop {
             }
 
             throw new IllegalStateException(
-                    "Agent 超过最大步数 " + MAX_STEPS + "，已安全停止"
+                    "Agent 超过最大步数 " + stepLimit + "，已安全停止"
             );
         } catch (Exception exception) {
             if (!stopTriggered) {
@@ -588,6 +620,13 @@ public final class AgentLoop {
         } catch (Exception exception) {
             return json.createObjectNode();
         }
+    }
+
+    private int normalizeMaxSteps(int value) {
+        if (value < 1) {
+            throw new IllegalArgumentException("maxSteps 必须大于 0");
+        }
+        return value;
     }
 
     private boolean shouldRunInBackground(DeepSeekClient.ToolCall call) {

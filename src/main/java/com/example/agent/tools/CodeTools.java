@@ -26,6 +26,8 @@ public final class CodeTools {
     private static final int MAX_FILE_LINES = 400;
     private static final int MAX_SEARCH_RESULTS = 50;
     private static final int MAX_PREVIEW_CHARS = 3_000;
+    private static final int DEFAULT_LIST_DEPTH = 8;
+    private static final int MAX_LIST_DEPTH = 12;
 
     private final Path projectRoot;
     private final ObjectMapper json;
@@ -100,7 +102,11 @@ public final class CodeTools {
                     String path = arguments.path("path").asText(".");
                     int maxDepth = Math.max(
                             1,
-                            Math.min(arguments.path("maxDepth").asInt(4), 6)
+                            Math.min(
+                                    arguments.path("maxDepth")
+                                            .asInt(DEFAULT_LIST_DEPTH),
+                                    MAX_LIST_DEPTH
+                            )
                     );
 
                     Path directory = resolvedPath(context);

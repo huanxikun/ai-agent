@@ -4,9 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BackgroundTaskManagerTest {
@@ -61,6 +63,46 @@ class BackgroundTaskManagerTest {
                     waitForNotifications(manager).get(0);
             assertEquals("failed", notification.status());
             assertTrue(notification.detail().contains("subagent boom"));
+        }
+    }
+
+    @Test
+    void preservesCompleteBackgroundResultInsteadOfDroppingAfter200Characters()
+            throws Exception {
+        try (BackgroundTaskManager manager = new BackgroundTaskManager(
+                Executors.newSingleThreadExecutor(),
+                JSON
+        )) {
+            String result = "完整研究结论-" + "x".repeat(500);
+            manager.start(
+                    "task",
+                    "长结果",
+                    () -> JSON.writeValueAsString(
+                            java.util.Map.of(
+                                    "status", "completed",
+                                    "result", result
+                            )
+                    )
+            );
+
+            BackgroundTaskManager.BackgroundNotification notification =
+                    waitForNotifications(manager).get(0);
+            assertEquals(result, notification.detail());
+        }
+    }
+
+    @Test
+    void rejectedSubmissionDoesNotLeaveGhostRunningTask() {
+        var executor = Executors.newSingleThreadExecutor();
+        executor.shutdownNow();
+        try (BackgroundTaskManager manager =
+                     new BackgroundTaskManager(executor, JSON)) {
+            assertThrows(
+                    RejectedExecutionException.class,
+                    () -> manager.start("task", "无法提交", () -> "never")
+            );
+            assertEquals(0, manager.summary().total());
+            assertTrue(manager.collectNotifications().isEmpty());
         }
     }
 

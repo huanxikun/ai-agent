@@ -354,6 +354,48 @@ class SubagentTest {
         assertFalse(result.text().contains("discarded-short-output"));
     }
 
+    @Test
+    void childIsNoLongerLimitedToSixSteps() throws Exception {
+        Path backend = projectRoot.resolve("src/Backend.java");
+        Files.createDirectories(backend.getParent());
+        Files.writeString(backend, "class Backend {}");
+
+        HookRegistry hooks = configuredHooks();
+        ToolRegistry childTools = readOnlyTools(hooks);
+        AtomicInteger calls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions, maxTokens, model) -> {
+                    int call = calls.getAndIncrement();
+                    if (call < 7) {
+                        return toolCall(
+                                "list-" + call,
+                                "list_files",
+                                JSON.createObjectNode()
+                                        .put("path", "src")
+                                        .put("maxDepth", 2)
+                        );
+                    }
+                    return finalResponse("超过旧上限后仍然完成。");
+                },
+                childTools,
+                hooks,
+                null,
+                runtimePrompt(childTools, null),
+                testRecovery(),
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "多轮研究",
+                "多轮读取 src 目录",
+                "parent"
+        );
+
+        assertEquals(8, calls.get());
+        assertEquals(7, result.toolCalls());
+        assertTrue(result.text().contains("超过旧上限"));
+    }
+
     private HookRegistry configuredHooks() throws Exception {
         HookRegistry hooks = new HookRegistry();
         DefaultAgentHooks.register_hooks(hooks);

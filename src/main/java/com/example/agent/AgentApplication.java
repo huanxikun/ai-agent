@@ -69,6 +69,16 @@ public final class AgentApplication {
                 ContextCompactor.DEFAULT_TOKEN_THRESHOLD,
                 "CONTEXT_TOKEN_THRESHOLD"
         );
+        int agentMaxSteps = parsePositiveInt(
+                env.get("AGENT_MAX_STEPS"),
+                AgentLoop.DEFAULT_MAX_STEPS,
+                "AGENT_MAX_STEPS"
+        );
+        int subagentMaxSteps = parsePositiveInt(
+                env.get("SUBAGENT_MAX_STEPS"),
+                Subagent.DEFAULT_MAX_STEPS,
+                "SUBAGENT_MAX_STEPS"
+        );
         ContextCompactor contextCompactor = new ContextCompactor(
                 projectRoot,
                 contextTokenThreshold,
@@ -109,6 +119,7 @@ public final class AgentApplication {
                 contextCompactor,
                 subagentPrompt,
                 errorRecovery,
+                subagentMaxSteps,
                 JSON
         );
 
@@ -137,6 +148,7 @@ public final class AgentApplication {
                 parentPrompt,
                 errorRecovery,
                 backgroundTasks,
+                agentMaxSteps,
                 JSON
         );
 
@@ -187,6 +199,10 @@ public final class AgentApplication {
                     "tokenThreshold", contextTokenThreshold,
                     "order", "L3->L1->L2->L4",
                     "reactiveFallback", true
+            ));
+            health.put("stepLimit", Map.of(
+                    "agent", agentMaxSteps,
+                    "subagent", subagentMaxSteps
             ));
             health.put("skills", Map.of(
                     "available", skillCatalog.discover().size(),
@@ -358,4 +374,5 @@ public final class AgentApplication {
             );
         }
     }
+
 }

@@ -35,9 +35,10 @@ async function initialize() {
   try {
     const response = await fetch("/api/health");
     const data = await response.json();
+    const stepLimit = data.stepLimit?.agent ?? "unknown";
     elements.provider.textContent = data.configured
-      ? `${data.model} · S13 Background Tasks`
-      : "API Key 未配置 · S11 Error Recovery";
+      ? `${data.model} · S13 Background Tasks · steps ${stepLimit}`
+      : `API Key 未配置 · S13 Background Tasks · steps ${stepLimit}`;
   } catch {
     elements.provider.textContent = "Java 服务未连接";
   }

@@ -18,7 +18,7 @@ import java.util.UUID;
  * 使用 S10 Prompt 与 S11 错误恢复的只读、不可递归 Subagent。
  */
 public final class Subagent implements SubagentExecutor {
-    private static final int MAX_STEPS = 6;
+    public static final int DEFAULT_MAX_STEPS = 24;
 
     private final ModelCall model;
     private final ToolRegistry tools;
@@ -26,6 +26,7 @@ public final class Subagent implements SubagentExecutor {
     private final ContextCompactor contextCompactor;
     private final SystemPromptAssembler systemPromptAssembler;
     private final ErrorRecovery errorRecovery;
+    private final int maxSteps;
     private final ObjectMapper json;
 
     public Subagent(
@@ -44,6 +45,29 @@ public final class Subagent implements SubagentExecutor {
                 contextCompactor,
                 systemPromptAssembler,
                 errorRecovery,
+                DEFAULT_MAX_STEPS,
+                json
+        );
+    }
+
+    public Subagent(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            ContextCompactor contextCompactor,
+            SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
+            int maxSteps,
+            ObjectMapper json
+    ) {
+        this(
+                model::createResponse,
+                tools,
+                hooks,
+                contextCompactor,
+                systemPromptAssembler,
+                errorRecovery,
+                maxSteps,
                 json
         );
     }
@@ -57,12 +81,35 @@ public final class Subagent implements SubagentExecutor {
             ErrorRecovery errorRecovery,
             ObjectMapper json
     ) {
+        this(
+                model,
+                tools,
+                hooks,
+                contextCompactor,
+                systemPromptAssembler,
+                errorRecovery,
+                DEFAULT_MAX_STEPS,
+                json
+        );
+    }
+
+    Subagent(
+            ModelCall model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            ContextCompactor contextCompactor,
+            SystemPromptAssembler systemPromptAssembler,
+            ErrorRecovery errorRecovery,
+            int maxSteps,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.contextCompactor = contextCompactor;
         this.systemPromptAssembler = systemPromptAssembler;
         this.errorRecovery = errorRecovery;
+        this.maxSteps = normalizeMaxSteps(maxSteps);
         this.json = json;
     }
 
@@ -76,7 +123,7 @@ public final class Subagent implements SubagentExecutor {
         int lastStep = 0;
         int toolCalls = 0;
         boolean stopped = false;
-        int stepLimit = MAX_STEPS;
+        int stepLimit = maxSteps;
         ErrorRecovery.RecoveryState recoveryState =
                 errorRecovery.newState();
         StringBuilder recoveredOutput = new StringBuilder();
@@ -235,7 +282,7 @@ public final class Subagent implements SubagentExecutor {
             }
 
             throw new IllegalStateException(
-                    "Subagent 超过最大步数 " + MAX_STEPS + "，已安全停止"
+                    "Subagent 超过最大步数 " + stepLimit + "，已安全停止"
             );
         } catch (Exception exception) {
             if (!stopped) {
@@ -302,6 +349,13 @@ public final class Subagent implements SubagentExecutor {
         if (text == null || text.isBlank()) return;
         if (!output.isEmpty()) output.append('\n');
         output.append(text);
+    }
+
+    private int normalizeMaxSteps(int value) {
+        if (value < 1) {
+            throw new IllegalArgumentException("maxSteps 必须大于 0");
+        }
+        return value;
     }
 
     private void triggerStop(

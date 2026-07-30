@@ -38,8 +38,25 @@ S13 在现有 Agent Harness 中加入后台任务能力，让较慢的只读研�
 - 若模型未显式指定，系统会对明显较慢的大范围研究任务做启发式兜底
 - 工具先返回 `background_started` 占位结果
 - 后台任务完成后，会以 `<task_notification>` 注入后续轮次
+- 通知保留 Subagent 的完整结果，不再只截取前 200 个字符
 
 这样 Agent 可以在 Subagent 后台读取代码时，继续完成当前轮中的其他同步操作。
+
+后台任务提交失败时会立即移除占位状态，避免健康接口中出现永远
+`running` 的幽灵任务。
+
+## 执行步数安全边界
+
+父 Agent 和只读 Subagent 支持更长的研究链路，但默认保持有限上限，避免
+模型反复调用工具造成死循环和持续 API 消耗：
+
+```dotenv
+AGENT_MAX_STEPS=32
+SUBAGENT_MAX_STEPS=24
+```
+
+两个值都必须大于 0，可以按项目规模调大。`GET /api/health` 的
+`stepLimit` 会返回当前生效值。
 
 ## 数据结构与状态
 
