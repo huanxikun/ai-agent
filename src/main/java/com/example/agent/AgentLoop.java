@@ -3,6 +3,7 @@ package com.example.agent;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
+import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoNagReminder;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.ToolRegistry;
@@ -18,7 +19,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * S06 Agent Cycle：在 S05 TodoWrite 上加入受限、只读 Subagent。
+ * S07 Agent Cycle：每次先构建 system prompt，再按需加载完整 Skill。
  */
 public final class AgentLoop {
     private static final int MAX_STEPS = 8;
@@ -47,6 +48,7 @@ public final class AgentLoop {
     private final ToolRegistry tools;
     private final HookRegistry hooks;
     private final TodoStore todoStore;
+    private final SkillCatalog skillCatalog;
     private final ObjectMapper json;
 
     public AgentLoop(
@@ -56,10 +58,22 @@ public final class AgentLoop {
             TodoStore todoStore,
             ObjectMapper json
     ) {
+        this(model, tools, hooks, todoStore, null, json);
+    }
+
+    public AgentLoop(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            TodoStore todoStore,
+            SkillCatalog skillCatalog,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
         this.todoStore = todoStore;
+        this.skillCatalog = skillCatalog;
         this.json = json;
     }
 
@@ -76,6 +90,21 @@ public final class AgentLoop {
         List<JsonNode> approvals = new ArrayList<>();
 
         try {
+            String systemPrompt = skillCatalog == null
+                    ? INSTRUCTIONS
+                    : skillCatalog.buildSystemPrompt(INSTRUCTIONS);
+            ArrayNode messages = json.createArrayNode();
+            messages.addObject()
+                    .put("role", "system")
+                    .put("content", systemPrompt);
+            trace.add(event(
+                    "system",
+                    "Build System · Skill Catalog",
+                    skillCatalog == null
+                            ? "已注入基础 system prompt"
+                            : "已注入基础 system prompt 与可用 Skill 摘要"
+            ));
+
             hooks.trigger_hooks(
                     HookEvent.USER_PROMPT_SCRIPT,
                     HookContext.forPrompt(runId, userMessage)
@@ -86,10 +115,6 @@ public final class AgentLoop {
                     "用户输入扩展执行完成"
             ));
 
-            ArrayNode messages = json.createArrayNode();
-            messages.addObject()
-                    .put("role", "system")
-                    .put("content", INSTRUCTIONS);
             messages.addObject()
                     .put("role", "user")
                     .put("content", userMessage);

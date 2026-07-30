@@ -1,6 +1,7 @@
 package com.example.agent.tools;
 
 import com.example.agent.subagents.SubagentExecutor;
+import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoItem;
 import com.example.agent.todos.TodoStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,7 +16,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 非文件类工具处理器。S05 在这里注册 todo_write。
+ * 非文件类工具处理器：TodoWrite、Subagent task 与 S07 load_skills。
  */
 public final class ToolHandlers {
     private static final int MAX_TODOS = 100;
@@ -28,10 +29,11 @@ public final class ToolHandlers {
 
     private final TodoStore todoStore;
     private final SubagentExecutor subagent;
+    private final SkillCatalog skillCatalog;
     private final ObjectMapper json;
 
     public ToolHandlers(TodoStore todoStore, ObjectMapper json) {
-        this(todoStore, null, json);
+        this(todoStore, null, null, json);
     }
 
     public ToolHandlers(
@@ -39,14 +41,62 @@ public final class ToolHandlers {
             SubagentExecutor subagent,
             ObjectMapper json
     ) {
+        this(todoStore, subagent, null, json);
+    }
+
+    public ToolHandlers(
+            TodoStore todoStore,
+            SubagentExecutor subagent,
+            SkillCatalog skillCatalog,
+            ObjectMapper json
+    ) {
         this.todoStore = todoStore;
         this.subagent = subagent;
+        this.skillCatalog = skillCatalog;
         this.json = json;
     }
 
     public void registerInto(ToolRegistry registry) {
-        registry.register(todoWrite());
+        if (todoStore != null) registry.register(todoWrite());
         if (subagent != null) registry.register(task());
+        registerSkillInto(registry);
+    }
+
+    public void registerSkillInto(ToolRegistry registry) {
+        if (skillCatalog != null) registry.register(loadSkills());
+    }
+
+    private ToolDefinition loadSkills() {
+        ObjectNode parameters = json.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("skills")
+                .put("type", "array")
+                .put("description", "分析任务后决定加载的 skill 名称列表")
+                .put("minItems", 1)
+                .put("maxItems", 5)
+                .putObject("items")
+                .put("type", "string");
+        parameters.putArray("required").add("skills");
+        parameters.put("additionalProperties", false);
+
+        return new ToolDefinition(
+                "load_skills",
+                "按需读取一个或多个 skill 的完整 SKILL.md。先分析任务，只加载真正相关的 skill。",
+                parameters,
+                (arguments, context) -> {
+                    JsonNode skillsNode = arguments.path("skills");
+                    if (!skillsNode.isArray()) {
+                        throw new IllegalArgumentException("skills 必须是数组");
+                    }
+                    List<String> names = new ArrayList<>();
+                    for (JsonNode item : skillsNode) names.add(item.asText(""));
+                    return json.writeValueAsString(Map.of(
+                            "status", "loaded",
+                            "skills", skillCatalog.load(names)
+                    ));
+                }
+        );
     }
 
     private ToolDefinition todoWrite() {

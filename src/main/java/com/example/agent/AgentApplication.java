@@ -7,6 +7,7 @@ import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.subagents.Subagent;
+import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolHandlers;
@@ -51,26 +52,32 @@ public final class AgentApplication {
         DefaultAgentHooks.register_hooks(hooks);
         PermissionHooks.register_hooks(hooks, permissions);
         TodoStore todoStore = new TodoStore();
+        SkillCatalog skillCatalog = new SkillCatalog(projectRoot);
 
         CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
         ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
         codeTools.registerReadOnlyInto(subagentTools);
+        new ToolHandlers(null, null, skillCatalog, JSON)
+                .registerSkillInto(subagentTools);
         Subagent subagent = new Subagent(
                 modelClient,
                 subagentTools,
                 hooks,
+                skillCatalog,
                 JSON
         );
 
         ToolRegistry tools = new ToolRegistry(JSON, hooks);
         codeTools.registerInto(tools);
-        new ToolHandlers(todoStore, subagent, JSON).registerInto(tools);
+        new ToolHandlers(todoStore, subagent, skillCatalog, JSON)
+                .registerInto(tools);
 
         AgentLoop agentLoop = new AgentLoop(
                 modelClient,
                 tools,
                 hooks,
                 todoStore,
+                skillCatalog,
                 JSON
         );
 
@@ -85,7 +92,11 @@ public final class AgentApplication {
                     "ok", true,
                     "model", model,
                     "configured", !apiKey.isBlank(),
-                    "stage", "s06-subagent",
+                    "stage", "s07-skill-loading",
+                    "skills", Map.of(
+                            "available", skillCatalog.discover().size(),
+                            "onDemand", true
+                    ),
                     "todos", todoStore.summary(),
                     "subagent", Map.of(
                             "enabled", true,

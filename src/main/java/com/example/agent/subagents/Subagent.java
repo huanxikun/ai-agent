@@ -4,6 +4,7 @@ import com.example.agent.DeepSeekClient;
 import com.example.agent.hooks.HookContext;
 import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
+import com.example.agent.skills.SkillCatalog;
 import com.example.agent.tools.ToolRegistry;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -30,6 +31,7 @@ public final class Subagent implements SubagentExecutor {
     private final ModelCall model;
     private final ToolRegistry tools;
     private final HookRegistry hooks;
+    private final SkillCatalog skillCatalog;
     private final ObjectMapper json;
 
     public Subagent(
@@ -38,7 +40,17 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ObjectMapper json
     ) {
-        this(model::createResponse, tools, hooks, json);
+        this(model::createResponse, tools, hooks, null, json);
+    }
+
+    public Subagent(
+            DeepSeekClient model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            SkillCatalog skillCatalog,
+            ObjectMapper json
+    ) {
+        this(model::createResponse, tools, hooks, skillCatalog, json);
     }
 
     Subagent(
@@ -47,9 +59,20 @@ public final class Subagent implements SubagentExecutor {
             HookRegistry hooks,
             ObjectMapper json
     ) {
+        this(model, tools, hooks, null, json);
+    }
+
+    Subagent(
+            ModelCall model,
+            ToolRegistry tools,
+            HookRegistry hooks,
+            SkillCatalog skillCatalog,
+            ObjectMapper json
+    ) {
         this.model = model;
         this.tools = tools;
         this.hooks = hooks;
+        this.skillCatalog = skillCatalog;
         this.json = json;
     }
 
@@ -71,15 +94,19 @@ public final class Subagent implements SubagentExecutor {
         );
 
         try {
+            String systemPrompt = skillCatalog == null
+                    ? INSTRUCTIONS
+                    : skillCatalog.buildSystemPrompt(INSTRUCTIONS);
+            ArrayNode messages = json.createArrayNode();
+            messages.addObject()
+                    .put("role", "system")
+                    .put("content", systemPrompt);
+
             hooks.trigger_hooks(
                     HookEvent.USER_PROMPT_SCRIPT,
                     HookContext.forPrompt(runId, task)
             );
 
-            ArrayNode messages = json.createArrayNode();
-            messages.addObject()
-                    .put("role", "system")
-                    .put("content", INSTRUCTIONS);
             messages.addObject()
                     .put("role", "user")
                     .put("content", task);

@@ -8,6 +8,7 @@ import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.permissions.FilePermissionService;
 import com.example.agent.permissions.HumanApprovalGate;
+import com.example.agent.skills.SkillCatalog;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolHandlers;
@@ -172,6 +173,79 @@ class SubagentTest {
         assertEquals(1, executions.get());
         assertEquals("completed", output.path("status").asText());
         assertEquals("结论", output.path("result").asText());
+    }
+
+    @Test
+    void childCanLoadRelevantSkillBeforeReadingCode() throws Exception {
+        Path skillDirectory = projectRoot.resolve("skills/backend-java");
+        Files.createDirectories(skillDirectory);
+        Files.writeString(
+                skillDirectory.resolve("SKILL.md"),
+                """
+                        ---
+                        name: backend-java
+                        description: 后端研究流程
+                        ---
+                        # 完整规则
+                        先定位工具注册，再阅读实现。
+                        """
+        );
+
+        HookRegistry hooks = configuredHooks();
+        SkillCatalog catalog = new SkillCatalog(projectRoot);
+        ToolRegistry childTools = readOnlyTools(hooks);
+        new ToolHandlers(null, null, catalog, JSON)
+                .registerSkillInto(childTools);
+        assertTrue(childTools.hasTool("load_skills"));
+        assertFalse(childTools.hasTool("task"));
+        assertFalse(childTools.hasTool("create_file"));
+        assertEquals(4, childTools.definitions().size());
+
+        AtomicInteger modelCalls = new AtomicInteger();
+        Subagent subagent = new Subagent(
+                (messages, definitions) -> {
+                    int call = modelCalls.getAndIncrement();
+                    if (call == 0) {
+                        assertTrue(
+                                messages.path(0).path("content").asText()
+                                        .contains("backend-java: 后端研究流程")
+                        );
+                        assertFalse(
+                                messages.path(0).path("content").asText()
+                                        .contains("先定位工具注册")
+                        );
+                        ObjectNode arguments = JSON.createObjectNode();
+                        arguments.putArray("skills").add("backend-java");
+                        return toolCall(
+                                "skill-1",
+                                "load_skills",
+                                arguments
+                        );
+                    }
+
+                    assertTrue(
+                            messages.path(messages.size() - 1)
+                                    .path("content")
+                                    .asText()
+                                    .contains("先定位工具注册")
+                    );
+                    return finalResponse("已按后端 Skill 完成分析。");
+                },
+                childTools,
+                hooks,
+                catalog,
+                JSON
+        );
+
+        SubagentExecutor.SubagentResult result = subagent.run(
+                "加载后端知识",
+                "分析工具注册",
+                "parent-run"
+        );
+
+        assertEquals(2, result.steps());
+        assertEquals(1, result.toolCalls());
+        assertTrue(result.text().contains("后端 Skill"));
     }
 
     private HookRegistry configuredHooks() throws Exception {

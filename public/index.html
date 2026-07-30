@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="支持受限只读 Subagent 的代码 Agent" />
-    <title>My Agent · S06 Subagent</title>
+    <meta name="description" content="支持按需加载 Skill 的代码 Agent" />
+    <title>My Agent · S07 Skill Loading</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -14,7 +14,7 @@
           <span class="brand-mark">A</span>
           <span>
             <strong>My Agent</strong>
-            <small>s06 · Subagent</small>
+            <small>s07 · Skill Loading</small>
           </span>
         </a>
         <div class="status">
@@ -26,9 +26,9 @@
       <main class="workspace">
         <section class="chat-panel">
           <div class="intro" id="intro">
-            <div class="eyebrow">STEP 06 · SUBAGENT</div>
-            <h1>任务太大<br />拆给子 Agent</h1>
-            <p>Subagent 拥有隔离上下文和只读代码工具，不能递归派生。</p>
+            <div class="eyebrow">STEP 07 · SKILL LOADING</div>
+            <h1>不同任务<br />加载不同知识</h1>
+            <p>Agent 先分析任务，再按需读取完整 Skill，不提前占用上下文。</p>
           </div>
           <div class="messages" id="messages" aria-live="polite"></div>
           <form class="composer" id="chatForm">
