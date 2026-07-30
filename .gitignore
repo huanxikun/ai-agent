@@ -2,5 +2,6 @@
 target/
 .agent-context/
 .memory/
+.tasks/
 *.log
 .DS_Store

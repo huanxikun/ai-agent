@@ -40,6 +40,13 @@ public final class SystemPromptAssembler {
             代码研究任务过大且可独立拆分时，可用 task 委派只读 Subagent。
             task 必须单一、具体；不要委派简单问题或文件修改。
             """;
+    private static final String PERSISTENT_TASK_SECTION = """
+            ## Persistent Task System
+            长期目标使用 create_task、list_tasks、get_task、claim_task、complete_task 管理。
+            任务跨会话保存在 .tasks/{id}.json；blockedBy 的任务全部 completed 后才能认领。
+            这与 todo_write 不同：Todo 是当前进程的执行步骤，Task 是可恢复、可认领的持久目标。
+            开始任务前先 claim_task，实际完成后才调用 complete_task。
+            """;
     private static final String FILE_MUTATION_SECTION = """
             ## File Mutations
             用户明确要求时才使用 create_file、edit_file 或 delete_file。
@@ -142,6 +149,16 @@ public final class SystemPromptAssembler {
         }
         if (hasAny(
                 content.enabledTools(),
+                "create_task",
+                "list_tasks",
+                "get_task",
+                "claim_task",
+                "complete_task"
+        )) {
+            sections.add(PERSISTENT_TASK_SECTION);
+        }
+        if (hasAny(
+                content.enabledTools(),
                 "create_file",
                 "edit_file",
                 "delete_file"
@@ -201,6 +218,14 @@ public final class SystemPromptAssembler {
         if (content.enabledTools().contains("task")) {
             sections.add("delegation");
         }
+        if (hasAny(
+                content.enabledTools(),
+                "create_task",
+                "list_tasks",
+                "get_task",
+                "claim_task",
+                "complete_task"
+        )) sections.add("persistent_tasks");
         if (hasAny(
                 content.enabledTools(),
                 "create_file",

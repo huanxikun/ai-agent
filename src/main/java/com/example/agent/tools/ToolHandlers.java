@@ -2,6 +2,8 @@ package com.example.agent.tools;
 
 import com.example.agent.subagents.SubagentExecutor;
 import com.example.agent.skills.SkillCatalog;
+import com.example.agent.tasks.PersistentTask;
+import com.example.agent.tasks.TaskStore;
 import com.example.agent.todos.TodoItem;
 import com.example.agent.todos.TodoStore;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,7 +18,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 非文件类工具处理器：TodoWrite、Subagent task 与 S07 load_skills。
+ * 非文件类工具处理器：TodoWrite、Subagent、Skill Loading 与持久 Task System。
  */
 public final class ToolHandlers {
     private static final int MAX_TODOS = 100;
@@ -30,6 +32,7 @@ public final class ToolHandlers {
     private final TodoStore todoStore;
     private final SubagentExecutor subagent;
     private final SkillCatalog skillCatalog;
+    private final TaskStore taskStore;
     private final ObjectMapper json;
 
     public ToolHandlers(TodoStore todoStore, ObjectMapper json) {
@@ -50,9 +53,20 @@ public final class ToolHandlers {
             SkillCatalog skillCatalog,
             ObjectMapper json
     ) {
+        this(todoStore, subagent, skillCatalog, null, json);
+    }
+
+    public ToolHandlers(
+            TodoStore todoStore,
+            SubagentExecutor subagent,
+            SkillCatalog skillCatalog,
+            TaskStore taskStore,
+            ObjectMapper json
+    ) {
         this.todoStore = todoStore;
         this.subagent = subagent;
         this.skillCatalog = skillCatalog;
+        this.taskStore = taskStore;
         this.json = json;
     }
 
@@ -60,10 +74,161 @@ public final class ToolHandlers {
         if (todoStore != null) registry.register(todoWrite());
         if (subagent != null) registry.register(task());
         registerSkillInto(registry);
+        registerTaskSystemInto(registry);
     }
 
     public void registerSkillInto(ToolRegistry registry) {
         if (skillCatalog != null) registry.register(loadSkills());
+    }
+
+    public void registerTaskSystemInto(ToolRegistry registry) {
+        if (taskStore == null) return;
+        registry.register(createTask());
+        registry.register(listTasks());
+        registry.register(getTask());
+        registry.register(claimTask());
+        registry.register(completeTask());
+    }
+
+    private ToolDefinition createTask() {
+        ObjectNode parameters = objectParameters();
+        ObjectNode properties = (ObjectNode) parameters.path("properties");
+        properties.putObject("subject")
+                .put("type", "string")
+                .put("description", "持久任务的简短标题");
+        properties.putObject("description")
+                .put("type", "string")
+                .put("description", "跨会话恢复工作所需的完整描述");
+        properties.putObject("blockedBy")
+                .put("type", "array")
+                .put("description", "必须先完成的任务 ID 列表")
+                .putObject("items")
+                .put("type", "string");
+        parameters.putArray("required").add("subject");
+
+        return new ToolDefinition(
+                "create_task",
+                "创建一个持久任务，可用 blockedBy 声明依赖。每个任务保存为 .tasks/{id}.json。",
+                parameters,
+                (arguments, context) -> {
+                    List<String> blockedBy = stringList(
+                            arguments.path("blockedBy"),
+                            "blockedBy"
+                    );
+                    PersistentTask task = taskStore.create(
+                            arguments.path("subject").asText(""),
+                            arguments.path("description").asText(""),
+                            blockedBy
+                    );
+                    System.out.printf(
+                            "[Task:create] %s %s%n",
+                            task.id(),
+                            task.subject()
+                    );
+                    return json.writeValueAsString(Map.of(
+                            "status", "created",
+                            "task", task
+                    ));
+                }
+        );
+    }
+
+    private ToolDefinition listTasks() {
+        return new ToolDefinition(
+                "list_tasks",
+                "列出磁盘中所有持久任务及其状态、owner 和 blockedBy 依赖。",
+                objectParameters(),
+                (arguments, context) -> {
+                    List<PersistentTask> tasks = taskStore.list();
+                    return json.writeValueAsString(Map.of(
+                            "count", tasks.size(),
+                            "tasks", tasks
+                    ));
+                }
+        );
+    }
+
+    private ToolDefinition getTask() {
+        ObjectNode parameters = taskIdParameters();
+        return new ToolDefinition(
+                "get_task",
+                "按 ID 读取一个持久任务的完整描述、状态、owner 和依赖。",
+                parameters,
+                (arguments, context) -> json.writeValueAsString(
+                        taskStore.get(arguments.path("task_id").asText(""))
+                )
+        );
+    }
+
+    private ToolDefinition claimTask() {
+        ObjectNode parameters = taskIdParameters();
+        ObjectNode properties = (ObjectNode) parameters.path("properties");
+        properties.putObject("owner")
+                .put("type", "string")
+                .put("description", "认领任务的 Agent 名称，默认 agent");
+        return new ToolDefinition(
+                "claim_task",
+                "认领依赖已完成的 pending 持久任务，并将其更新为 in_progress。",
+                parameters,
+                (arguments, context) -> {
+                    String owner = arguments.path("owner").asText("agent");
+                    TaskStore.ActionResult result = taskStore.claim(
+                            arguments.path("task_id").asText(""),
+                            owner
+                    );
+                    System.out.printf(
+                            "[Task:claim] %s%n",
+                            result.message().replace('\n', ' ')
+                    );
+                    return json.writeValueAsString(result);
+                }
+        );
+    }
+
+    private ToolDefinition completeTask() {
+        return new ToolDefinition(
+                "complete_task",
+                "完成一个 in_progress 持久任务，并报告因此解锁的下游任务。",
+                taskIdParameters(),
+                (arguments, context) -> {
+                    TaskStore.ActionResult result = taskStore.complete(
+                            arguments.path("task_id").asText("")
+                    );
+                    System.out.printf(
+                            "[Task:complete] %s%n",
+                            result.message().replace('\n', ' ')
+                    );
+                    return json.writeValueAsString(result);
+                }
+        );
+    }
+
+    private ObjectNode taskIdParameters() {
+        ObjectNode parameters = objectParameters();
+        ((ObjectNode) parameters.path("properties"))
+                .putObject("task_id")
+                .put("type", "string")
+                .put("description", "task_ 开头的持久任务 ID");
+        parameters.putArray("required").add("task_id");
+        return parameters;
+    }
+
+    private ObjectNode objectParameters() {
+        ObjectNode parameters = json.createObjectNode();
+        parameters.put("type", "object");
+        parameters.putObject("properties");
+        parameters.put("additionalProperties", false);
+        return parameters;
+    }
+
+    private List<String> stringList(JsonNode node, String field) {
+        if (node.isMissingNode() || node.isNull()) return List.of();
+        if (!node.isArray()) {
+            throw new IllegalArgumentException(field + " 必须是数组");
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : node) values.add(item.asText(""));
+        return List.copyOf(values);
     }
 
     private ToolDefinition loadSkills() {

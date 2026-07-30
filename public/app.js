@@ -36,7 +36,7 @@ async function initialize() {
     const response = await fetch("/api/health");
     const data = await response.json();
     elements.provider.textContent = data.configured
-      ? `${data.model} · S11 Error Recovery`
+      ? `${data.model} · S12 Task System`
       : "API Key 未配置 · S11 Error Recovery";
   } catch {
     elements.provider.textContent = "Java 服务未连接";

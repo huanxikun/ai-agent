@@ -12,6 +12,7 @@ import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.memory.MemorySystem;
 import com.example.agent.subagents.Subagent;
 import com.example.agent.skills.SkillCatalog;
+import com.example.agent.tasks.TaskStore;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.CodeTools;
 import com.example.agent.tools.ToolHandlers;
@@ -60,6 +61,7 @@ public final class AgentApplication {
         DefaultAgentHooks.register_hooks(hooks);
         PermissionHooks.register_hooks(hooks, permissions);
         TodoStore todoStore = new TodoStore();
+        TaskStore taskStore = new TaskStore(projectRoot, JSON);
         SkillCatalog skillCatalog = new SkillCatalog(projectRoot);
         int contextTokenThreshold = parsePositiveInt(
                 env.get("CONTEXT_TOKEN_THRESHOLD"),
@@ -109,7 +111,7 @@ public final class AgentApplication {
 
         ToolRegistry tools = new ToolRegistry(JSON, hooks);
         codeTools.registerInto(tools);
-        new ToolHandlers(todoStore, subagent, skillCatalog, JSON)
+        new ToolHandlers(todoStore, subagent, skillCatalog, taskStore, JSON)
                 .registerInto(tools);
         SystemPromptAssembler parentPrompt =
                 new SystemPromptAssembler(
@@ -145,7 +147,13 @@ public final class AgentApplication {
             health.put("ok", true);
             health.put("model", model);
             health.put("configured", !apiKey.isBlank());
-            health.put("stage", "s11-error-recovery");
+            health.put("stage", "s12-task-system");
+            health.put("taskSystem", Map.of(
+                    "enabled", true,
+                    "persistent", true,
+                    "directory", ".tasks",
+                    "summary", taskStore.summary()
+            ));
             health.put("memory", Map.of(
                     "enabled", true,
                     "count", memorySystem.count(),

@@ -46,10 +46,12 @@ class SystemPromptAssemblerTest {
         assertTrue(initial.contains("## Evidence"));
         assertFalse(initial.contains("## Planning"));
         assertFalse(initial.contains("## Delegation"));
+        assertFalse(initial.contains("## Persistent Task System"));
         assertFalse(initial.contains("## File Mutations"));
 
         tools.register(tool("todo_write"));
         tools.register(tool("task"));
+        tools.register(tool("create_task"));
         tools.register(tool("edit_file"));
         String expanded = assembler.get_system_prompt(
                 assembler.update_content()
@@ -57,6 +59,8 @@ class SystemPromptAssemblerTest {
 
         assertTrue(expanded.contains("## Planning"));
         assertTrue(expanded.contains("## Delegation"));
+        assertTrue(expanded.contains("## Persistent Task System"));
+        assertTrue(expanded.contains("这与 todo_write 不同"));
         assertTrue(expanded.contains("## File Mutations"));
         assertNotEquals(initial, expanded);
     }
