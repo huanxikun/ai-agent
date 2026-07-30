@@ -355,7 +355,7 @@ class SubagentTest {
     }
 
     @Test
-    void childIsNoLongerLimitedToSixSteps() throws Exception {
+    void childCanRunPastThePreviousSubagentStepCap() throws Exception {
         Path backend = projectRoot.resolve("src/Backend.java");
         Files.createDirectories(backend.getParent());
         Files.writeString(backend, "class Backend {}");
@@ -366,7 +366,7 @@ class SubagentTest {
         Subagent subagent = new Subagent(
                 (messages, definitions, maxTokens, model) -> {
                     int call = calls.getAndIncrement();
-                    if (call < 7) {
+                    if (call < 26) {
                         return toolCall(
                                 "list-" + call,
                                 "list_files",
@@ -391,8 +391,8 @@ class SubagentTest {
                 "parent"
         );
 
-        assertEquals(8, calls.get());
-        assertEquals(7, result.toolCalls());
+        assertEquals(27, calls.get());
+        assertEquals(26, result.toolCalls());
         assertTrue(result.text().contains("超过旧上限"));
     }
 

@@ -24,6 +24,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -71,12 +72,12 @@ public final class AgentApplication {
         );
         int agentMaxSteps = parsePositiveInt(
                 env.get("AGENT_MAX_STEPS"),
-                AgentLoop.DEFAULT_MAX_STEPS,
+                AgentLoop.UNLIMITED_MAX_STEPS,
                 "AGENT_MAX_STEPS"
         );
         int subagentMaxSteps = parsePositiveInt(
                 env.get("SUBAGENT_MAX_STEPS"),
-                Subagent.DEFAULT_MAX_STEPS,
+                Subagent.UNLIMITED_MAX_STEPS,
                 "SUBAGENT_MAX_STEPS"
         );
         ContextCompactor contextCompactor = new ContextCompactor(
@@ -152,7 +153,16 @@ public final class AgentApplication {
                 JSON
         );
 
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        HttpServer server;
+        try {
+            server = HttpServer.create(new InetSocketAddress(port), 0);
+        } catch (BindException exception) {
+            throw new IllegalStateException(
+                    "端口 %d 已被占用。请先停止已有服务，或在 .env 中设置其他 PORT。"
+                            .formatted(port),
+                    exception
+            );
+        }
 
         server.createContext("/api/health", exchange -> {
             if (!"GET".equals(exchange.getRequestMethod())) {
@@ -201,8 +211,10 @@ public final class AgentApplication {
                     "reactiveFallback", true
             ));
             health.put("stepLimit", Map.of(
-                    "agent", agentMaxSteps,
-                    "subagent", subagentMaxSteps
+                    "agent", agentMaxSteps == 0 ? "unlimited" : agentMaxSteps,
+                    "subagent", subagentMaxSteps == 0
+                            ? "unlimited"
+                            : subagentMaxSteps
             ));
             health.put("skills", Map.of(
                     "available", skillCatalog.discover().size(),
@@ -366,11 +378,11 @@ public final class AgentApplication {
         if (rawValue == null || rawValue.isBlank()) return defaultValue;
         try {
             int value = Integer.parseInt(rawValue.trim());
-            if (value < 1) throw new NumberFormatException();
+            if (value < 0) throw new NumberFormatException();
             return value;
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException(
-                    name + " 必须是大于 0 的整数"
+                    name + " 必须是大于等于 0 的整数"
             );
         }
     }

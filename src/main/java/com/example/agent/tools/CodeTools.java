@@ -90,7 +90,7 @@ public final class CodeTools {
 
         properties.putObject("maxDepth")
                 .put("type", "integer")
-                .put("description", "最大递归层级，建议 1 到 6");
+                .put("description", "最大递归层级，默认 8，建议 1 到 12");
 
         parameters.put("additionalProperties", false);
 

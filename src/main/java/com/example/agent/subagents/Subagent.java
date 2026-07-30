@@ -18,7 +18,7 @@ import java.util.UUID;
  * 使用 S10 Prompt 与 S11 错误恢复的只读、不可递归 Subagent。
  */
 public final class Subagent implements SubagentExecutor {
-    public static final int DEFAULT_MAX_STEPS = 24;
+    public static final int UNLIMITED_MAX_STEPS = 0;
 
     private final ModelCall model;
     private final ToolRegistry tools;
@@ -45,7 +45,7 @@ public final class Subagent implements SubagentExecutor {
                 contextCompactor,
                 systemPromptAssembler,
                 errorRecovery,
-                DEFAULT_MAX_STEPS,
+                UNLIMITED_MAX_STEPS,
                 json
         );
     }
@@ -88,7 +88,7 @@ public final class Subagent implements SubagentExecutor {
                 contextCompactor,
                 systemPromptAssembler,
                 errorRecovery,
-                DEFAULT_MAX_STEPS,
+                UNLIMITED_MAX_STEPS,
                 json
         );
     }
@@ -154,7 +154,7 @@ public final class Subagent implements SubagentExecutor {
                     .put("content", task);
 
             stepLoop:
-            for (int step = 1; step <= stepLimit; step++) {
+            for (int step = 1; withinStepLimit(step, stepLimit); step++) {
                 lastStep = step;
                 String refreshed =
                         systemPromptAssembler.get_system_prompt(
@@ -206,7 +206,7 @@ public final class Subagent implements SubagentExecutor {
                     appendRecovered(recoveredOutput, response.text());
                     if (action
                             == ErrorRecovery.MaxTokensAction.APPEND_AND_CONTINUE) {
-                        if (step == stepLimit) stepLimit++;
+                        if (step == stepLimit && stepLimit > 0) stepLimit++;
                         messages.addObject()
                                 .put("role", "user")
                                 .put(
@@ -352,10 +352,14 @@ public final class Subagent implements SubagentExecutor {
     }
 
     private int normalizeMaxSteps(int value) {
-        if (value < 1) {
-            throw new IllegalArgumentException("maxSteps 必须大于 0");
+        if (value < 0) {
+            throw new IllegalArgumentException("maxSteps 不能小于 0");
         }
         return value;
+    }
+
+    private boolean withinStepLimit(int step, int stepLimit) {
+        return stepLimit == UNLIMITED_MAX_STEPS || step <= stepLimit;
     }
 
     private void triggerStop(

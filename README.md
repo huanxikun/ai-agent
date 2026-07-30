@@ -150,6 +150,7 @@ mvn compile exec:java
 ```
 
 配置 `DEEPSEEK_API_KEY` 后访问 `http://localhost:3000`。
+如果 `3000` 端口已被占用，可在 `.env` 中设置 `PORT=3001` 等其他端口后再启动。
 
 ```powershell
 mvn test

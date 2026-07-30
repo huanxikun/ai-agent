@@ -27,7 +27,7 @@ import java.util.UUID;
  * S11 Agent Cycle：在 compress + memory load 后对业务 LLM 分类恢复。
  */
 public final class AgentLoop {
-    public static final int DEFAULT_MAX_STEPS = 32;
+    public static final int UNLIMITED_MAX_STEPS = 0;
 
     private final DeepSeekClient model;
     private final ToolRegistry tools;
@@ -63,7 +63,7 @@ public final class AgentLoop {
                 systemPromptAssembler,
                 errorRecovery,
                 backgroundTasks,
-                DEFAULT_MAX_STEPS,
+                UNLIMITED_MAX_STEPS,
                 json
         );
     }
@@ -165,7 +165,7 @@ public final class AgentLoop {
                     .put("content", userMessage);
 
             stepLoop:
-            for (int step = 1; step <= stepLimit; step++) {
+            for (int step = 1; withinStepLimit(step, stepLimit); step++) {
                 lastStep = step;
                 refreshSystemPrompt(messages, step, trace);
                 compactBeforeModel(messages, runId, step, trace);
@@ -204,7 +204,7 @@ public final class AgentLoop {
                     appendRecovered(recoveredOutput, response.text());
                     if (action
                             == ErrorRecovery.MaxTokensAction.APPEND_AND_CONTINUE) {
-                        if (step == stepLimit) stepLimit++;
+                        if (step == stepLimit && stepLimit > 0) stepLimit++;
                         messages.addObject()
                                 .put("role", "user")
                                 .put(
@@ -259,6 +259,7 @@ public final class AgentLoop {
                 if (response.toolCalls().isEmpty()) {
                     if (nagRequired) {
                         if (step == stepLimit
+                                && stepLimit > 0
                                 && !reminderGraceTurnUsed) {
                             stepLimit++;
                             reminderGraceTurnUsed = true;
@@ -374,6 +375,7 @@ public final class AgentLoop {
 
                 if (nagRequired) {
                     if (step == stepLimit
+                            && stepLimit > 0
                             && !reminderGraceTurnUsed) {
                         stepLimit++;
                         reminderGraceTurnUsed = true;
@@ -623,10 +625,14 @@ public final class AgentLoop {
     }
 
     private int normalizeMaxSteps(int value) {
-        if (value < 1) {
-            throw new IllegalArgumentException("maxSteps 必须大于 0");
+        if (value < 0) {
+            throw new IllegalArgumentException("maxSteps 不能小于 0");
         }
         return value;
+    }
+
+    private boolean withinStepLimit(int step, int stepLimit) {
+        return stepLimit == UNLIMITED_MAX_STEPS || step <= stepLimit;
     }
 
     private boolean shouldRunInBackground(DeepSeekClient.ToolCall call) {
