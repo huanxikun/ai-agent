@@ -338,6 +338,46 @@ button { color: inherit; }
   height: auto;
 }
 
+.tool-trace-details {
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #0d0f0f;
+}
+
+.tool-trace-details summary {
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font: 11px/1.5 ui-monospace, monospace;
+  user-select: none;
+}
+
+.tool-trace-details summary:hover { color: var(--text); }
+
+.tool-trace-details pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font: 11px/1.6 ui-monospace, monospace;
+  white-space: pre-line;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  background: var(--accent);
+  animation: blink 0.7s steps(2) infinite;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
 .composer {
   position: absolute;
   z-index: 2;

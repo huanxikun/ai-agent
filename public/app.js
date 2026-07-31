@@ -120,7 +120,8 @@ const TOOL_HINTS = {
 
 function handleStreamEvent(data, agentMessage) {
   if (data.type === "result") {
-    setMessageText(agentMessage, data.text);
+    collapseBubbleLines(agentMessage);
+    streamMarkdown(agentMessage, data.text);
     renderTodos(data.todos ?? []);
     for (const approval of data.approvals ?? []) {
       addApprovalCard(approval);
@@ -131,6 +132,7 @@ function handleStreamEvent(data, agentMessage) {
     elements.traceSummary.classList.add("visible");
   } else if (data.type === "error") {
     agentMessage.classList.add("error");
+    cancelStream(agentMessage);
     setMessageText(agentMessage, data.error);
   } else {
     if (data.kind === "tool" || data.kind === "approval") {
@@ -142,6 +144,59 @@ function handleStreamEvent(data, agentMessage) {
       elements.messages.scrollTop = elements.messages.scrollHeight;
     }
   }
+}
+
+function cancelStream(agentMessage) {
+  if (agentMessage._streamTimer) {
+    clearInterval(agentMessage._streamTimer);
+    agentMessage._streamTimer = null;
+  }
+}
+
+function collapseBubbleLines(agentMessage) {
+  const el = agentMessage.querySelector(".message-text");
+  if (agentMessage._bubbleLines && agentMessage._bubbleLines.length > 0) {
+    const details = document.createElement("details");
+    details.className = "tool-trace-details";
+    const summary = document.createElement("summary");
+    summary.textContent = `工具调用 (${agentMessage._bubbleLines.length})`;
+    const pre = document.createElement("pre");
+    pre.textContent = agentMessage._bubbleLines.join("\n");
+    details.append(summary, pre);
+    el.style.whiteSpace = "";
+    el.replaceChildren(details);
+  } else {
+    el.style.whiteSpace = "";
+    el.textContent = "";
+  }
+  agentMessage._bubbleLines = null;
+}
+
+function streamMarkdown(agentMessage, text) {
+  cancelStream(agentMessage);
+  const el = agentMessage.querySelector(".message-text");
+  let pos = 0;
+  const chunkSize = 3;
+  const interval = 20;
+
+  agentMessage._streamTimer = setInterval(() => {
+    pos += chunkSize;
+    const partial = text.slice(0, pos);
+
+    if (window.marked) {
+      el.innerHTML = window.marked.parse(partial)
+        + '<span class="stream-cursor"></span>';
+    } else {
+      el.textContent = partial + "▎";
+    }
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+
+    if (pos >= text.length) {
+      clearInterval(agentMessage._streamTimer);
+      agentMessage._streamTimer = null;
+      setMessageText(agentMessage, text);
+    }
+  }, interval);
 }
 
 function appendBubbleLine(agentMessage, text) {
