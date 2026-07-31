@@ -412,7 +412,8 @@ class SubagentTest {
                 projectRoot,
                 new HumanApprovalGate(),
                 hooks,
-                JSON
+                JSON,
+                3001
         ).registerReadOnlyInto(tools);
         return tools;
     }

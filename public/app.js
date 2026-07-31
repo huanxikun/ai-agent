@@ -17,9 +17,26 @@ const elements = {
 };
 
 let busy = false;
+let abortController = null;
 
 if (window.marked) {
   marked.setOptions({ breaks: true });
+}
+
+function externalizeLinks(element) {
+  element.querySelectorAll("a").forEach(a => {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  });
+}
+
+function renderMarkdown(target, text) {
+  if (window.marked) {
+    target.innerHTML = window.marked.parse(text);
+    externalizeLinks(target);
+  } else {
+    target.textContent = text;
+  }
 }
 
 initialize();
@@ -28,13 +45,17 @@ async function initialize() {
   autoResize();
   elements.form.addEventListener("submit", (event) => {
     event.preventDefault();
-    submitMessage(elements.input.value);
+    if (busy) {
+      stopAgent();
+    } else {
+      submitMessage(elements.input.value);
+    }
   });
   elements.input.addEventListener("input", autoResize);
   elements.input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      submitMessage(elements.input.value);
+      if (!busy) submitMessage(elements.input.value);
     }
   });
   elements.reset.addEventListener("click", resetPage);
@@ -56,7 +77,8 @@ async function submitMessage(rawMessage) {
   if (!message || busy) return;
 
   busy = true;
-  elements.send.disabled = true;
+  abortController = new AbortController();
+  setStopMode(true);
   elements.input.value = "";
   autoResize();
   elements.intro.classList.add("hidden");
@@ -68,7 +90,8 @@ async function submitMessage(rawMessage) {
     const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message })
+      body: JSON.stringify({ message }),
+      signal: abortController.signal
     });
     if (!response.ok) {
       const data = await response.json();
@@ -95,14 +118,72 @@ async function submitMessage(rawMessage) {
       }
     }
   } catch (error) {
-    agentMessage.classList.add("error");
-    setMessageText(agentMessage, error.message);
-    addTrace("error", "运行失败", error.message);
+    if (error.name === "AbortError") {
+      finalizeOnStop(agentMessage);
+    } else {
+      agentMessage.classList.add("error");
+      setMessageText(agentMessage, error.message);
+      addTrace("error", "运行失败", error.message);
+    }
   } finally {
     busy = false;
-    elements.send.disabled = false;
+    abortController = null;
+    setStopMode(false);
     elements.input.focus();
   }
+}
+
+function setStopMode(active) {
+  const span = elements.send.querySelector("span");
+  const b = elements.send.querySelector("b");
+  if (active) {
+    elements.send.classList.add("stop-mode");
+    elements.send.disabled = false;
+    if (span) span.textContent = "停止";
+    if (b) b.textContent = "■";
+  } else {
+    elements.send.classList.remove("stop-mode");
+    elements.send.disabled = false;
+    if (span) span.textContent = "发送";
+    if (b) b.textContent = "↑";
+  }
+}
+
+function stopAgent() {
+  if (abortController) abortController.abort();
+}
+
+function finalizeOnStop(agentMessage) {
+  // 折叠正在流式输出的文本
+  if (agentMessage._streamedText) {
+    foldStreamedText(agentMessage);
+    agentMessage._streamedText = null;
+  }
+  // 折叠活跃的工具卡片
+  foldToolCards(agentMessage);
+
+  // 如果消息体没有任何实际内容，添加中断提示
+  const body = agentMessage.querySelector(":scope > .message-body");
+  if (body) {
+    const textBody = body.querySelector(":scope > .answer-body");
+    const hasText = textBody && textBody.textContent.trim();
+    const hasDetails = body.querySelector(":scope > details");
+    if (!hasText && !hasDetails) {
+      setMessageText(agentMessage, "*已停止*");
+    } else {
+      appendStopNotice(agentMessage);
+    }
+  }
+  addTrace("done", "用户中断", "用户主动停止了执行");
+}
+
+function appendStopNotice(agentMessage) {
+  const body = agentMessage.querySelector(":scope > .message-body");
+  if (!body) return;
+  const notice = document.createElement("div");
+  notice.className = "stop-notice";
+  notice.textContent = "⏹ 已停止";
+  body.appendChild(notice);
 }
 
 const TOOL_INFO = {
@@ -116,6 +197,7 @@ const TOOL_INFO = {
   connect_mcp: { icon: "🔌", label: "连接服务" },
   task: { icon: "🤖", label: "执行子任务" },
   load_skills: { icon: "📚", label: "加载技能" },
+  ask_user: { icon: "❓", label: "提问用户" },
   __approval: { icon: "⏳", label: "等待审批" },
 };
 
@@ -134,6 +216,7 @@ function handleStreamEvent(data, agentMessage) {
     if (window.marked) {
       body.innerHTML = window.marked.parse(agentMessage._streamedText)
         + '<span class="stream-cursor"></span>';
+      externalizeLinks(body);
     } else {
       body.textContent = agentMessage._streamedText + "▎";
     }
@@ -146,12 +229,23 @@ function handleStreamEvent(data, agentMessage) {
     return;
   }
 
+  if (data.type === "user_question") {
+    if (agentMessage._streamedText) {
+      foldStreamedText(agentMessage);
+    }
+    agentMessage._streamedText = null;
+    renderUserQuestion(data, agentMessage);
+    return;
+  }
+
   if (data.type === "result") {
     foldToolCards(agentMessage);
-    if (agentMessage._streamedText) {
-      setMessageText(agentMessage, data.text);
-    } else {
-      streamMarkdown(agentMessage, data.text);
+    if (!agentMessage._hasUserQuestion) {
+      if (agentMessage._streamedText) {
+        setMessageText(agentMessage, data.text);
+      } else {
+        streamMarkdown(agentMessage, data.text);
+      }
     }
     renderTodos(data.todos ?? []);
     for (const approval of data.approvals ?? []) {
@@ -187,10 +281,75 @@ function cancelStream(agentMessage) {
   }
 }
 
+function renderUserQuestion(data, agentMessage) {
+  agentMessage._hasUserQuestion = true;
+  const el = agentMessage.querySelector(".message-text");
+  // 清除"思考中…"
+  const hasRealContent = el.querySelector("details, .tool-card, .answer-body");
+  if (!hasRealContent) {
+    el.textContent = "";
+    el.style.whiteSpace = "";
+  }
+
+  // 渲染问题文本
+  const questionBody = document.createElement("div");
+  questionBody.className = "answer-body";
+  renderMarkdown(questionBody, data.question);
+  el.appendChild(questionBody);
+
+  // 渲染选项卡片
+  const options = Array.isArray(data.options) ? data.options : [];
+  if (options.length > 0) {
+    const card = document.createElement("div");
+    card.className = "user-question-card";
+
+    const hint = document.createElement("div");
+    hint.className = "user-question-hint";
+    hint.textContent = "选择一个选项，或在下方输入框直接回复";
+    card.appendChild(hint);
+
+    const btnList = document.createElement("div");
+    btnList.className = "user-question-options";
+
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "user-question-option";
+
+      const label = document.createElement("span");
+      label.className = "option-label";
+      label.textContent = opt.label;
+      btn.appendChild(label);
+
+      if (opt.description) {
+        const desc = document.createElement("span");
+        desc.className = "option-desc";
+        desc.textContent = opt.description;
+        btn.appendChild(desc);
+      }
+
+      btn.addEventListener("click", () => {
+        // 禁用所有按钮
+        btnList.querySelectorAll("button").forEach(b => b.disabled = true);
+        btn.classList.add("selected");
+        // 发送选项作为用户消息
+        submitMessage(opt.label);
+      });
+
+      btnList.appendChild(btn);
+    }
+
+    card.appendChild(btnList);
+    el.appendChild(card);
+  }
+
+  elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
 function getToolName(data) {
   if (data.kind === "model") return null;
   if (data.kind === "tool") {
-    return data.title.replace(/^工具\s*-\s*/, "").trim();
+    return data.title.replace(/^工具\s*[·\-]\s*/, "").trim();
   }
   if (data.kind === "approval") return "__approval";
   return null;
@@ -296,6 +455,7 @@ function streamMarkdown(agentMessage, text) {
     if (window.marked) {
       body.innerHTML = window.marked.parse(partial)
         + '<span class="stream-cursor"></span>';
+      externalizeLinks(body);
     } else {
       body.textContent = partial + "▎";
     }
@@ -304,11 +464,7 @@ function streamMarkdown(agentMessage, text) {
     if (pos >= text.length) {
       clearInterval(agentMessage._streamTimer);
       agentMessage._streamTimer = null;
-      if (window.marked) {
-        body.innerHTML = window.marked.parse(text);
-      } else {
-        body.textContent = text;
-      }
+      renderMarkdown(body, text);
     }
   }, 20);
 }
@@ -351,6 +507,7 @@ function setMessageText(messageElement, text) {
   }
   if (window.marked) {
     body.innerHTML = window.marked.parse(text);
+    externalizeLinks(body);
   } else {
     body.textContent = text;
   }

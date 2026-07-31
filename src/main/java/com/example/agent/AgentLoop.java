@@ -43,6 +43,7 @@ public final class AgentLoop {
     private final BackgroundTaskManager backgroundTasks;
     private final int maxSteps;
     private final ObjectMapper json;
+    private volatile boolean stopRequested = false;
 
     public AgentLoop(
             DeepSeekClient model,
@@ -98,6 +99,7 @@ public final class AgentLoop {
     }
 
     public RunResult run(String userMessage) throws Exception {
+        stopRequested = false;
         long startedAt = System.currentTimeMillis();
         String runId = UUID.randomUUID().toString();
         int toolCalls = 0;
@@ -108,6 +110,7 @@ public final class AgentLoop {
         boolean reminderGraceTurnUsed = false;
         List<Map<String, Object>> trace = new ArrayList<>();
         List<JsonNode> approvals = new ArrayList<>();
+        boolean userQuestionPending = false;
         ErrorRecovery.RecoveryState recoveryState =
                 errorRecovery.newState();
         StringBuilder recoveredOutput = new StringBuilder();
@@ -169,6 +172,10 @@ public final class AgentLoop {
 
             stepLoop:
             for (int step = 1; withinStepLimit(step, stepLimit); step++) {
+                if (stopRequested) {
+                    trace.add(event("done", "用户中断", "用户主动停止了执行"));
+                    break stepLoop;
+                }
                 lastStep = step;
                 refreshSystemPrompt(messages, step, trace);
                 compactBeforeModel(messages, runId, step, trace);
@@ -358,12 +365,27 @@ public final class AgentLoop {
                     }
 
                     JsonNode outputNode = tryParseJson(output);
-                    if ("approval_required".equals(outputNode.path("status").asText())) {
+                    String status = outputNode.path("status").asText();
+                    if ("approval_required".equals(status)) {
                         approvals.add(outputNode);
                         trace.add(event(
                                 "approval",
                                 "等待批准 · " + call.name(),
                                 outputNode.path("path").asText()
+                        ));
+                    } else if ("user_question".equals(status)) {
+                        userQuestionPending = true;
+                        if (streamHandler != null) {
+                            Map<String, Object> qEvent = new LinkedHashMap<>();
+                            qEvent.put("type", "user_question");
+                            qEvent.put("question", outputNode.path("question").asText(""));
+                            qEvent.put("options", outputNode.get("options"));
+                            streamHandler.accept(qEvent);
+                        }
+                        trace.add(event(
+                                "hook",
+                                "等待用户回答",
+                                outputNode.path("question").asText("")
                         ));
                     } else {
                         trace.add(event("done", "工具完成 · " + call.name(), output));
@@ -374,6 +396,34 @@ public final class AgentLoop {
                     item.put("tool_call_id", call.callId());
                     item.put("content", output);
                     memoryTranscript.add(item.deepCopy());
+                }
+
+                // 有用户提问时暂停执行，等待用户回答
+                if (userQuestionPending) {
+                    trace.add(event(
+                            "done",
+                            "等待用户回答",
+                            "问题已呈现给用户，暂停执行等待回答"
+                    ));
+                    extractMemories(memoryTranscript, trace);
+                    stopTriggered = true;
+                    triggerStop(
+                            runId,
+                            userMessage,
+                            lastStep,
+                            "user_question",
+                            null,
+                            trace
+                    );
+                    return new RunResult(
+                            "等待你的回答：请在下方选择选项或直接输入回复。",
+                            lastStep,
+                            toolCalls,
+                            System.currentTimeMillis() - startedAt,
+                            trace,
+                            approvals,
+                            todoStore.snapshot()
+                    );
                 }
 
                 // 有待审批操作时暂停执行，等待用户决定
@@ -800,6 +850,10 @@ public final class AgentLoop {
 
     public void setStreamHandler(Consumer<Map<String, Object>> handler) {
         this.streamHandler = handler;
+    }
+
+    public void requestStop() {
+        stopRequested = true;
     }
 
     public record RunResult(

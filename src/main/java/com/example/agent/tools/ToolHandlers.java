@@ -85,6 +85,7 @@ public final class ToolHandlers {
     }
 
     public void registerInto(ToolRegistry registry) {
+        registry.register(askUser());
         if (todoStore != null) registry.register(todoWrite());
         if (subagent != null) registry.register(task());
         if (mcpManager != null) registry.register(connectMcp(registry));
@@ -438,6 +439,55 @@ public final class ToolHandlers {
                             "server", result.serverName(),
                             "toolNames", result.toolNames()
                     ));
+                }
+        );
+    }
+
+    private ToolDefinition askUser() {
+        ObjectNode parameters = json.createObjectNode();
+        parameters.put("type", "object");
+        ObjectNode properties = parameters.putObject("properties");
+        properties.putObject("question")
+                .put("type", "string")
+                .put("description", "向用户提出的问题");
+        ObjectNode optionsProp = properties.putObject("options");
+        optionsProp.put("type", "array")
+                .put("description", "可选选项列表，用户可以点选或自行输入");
+        ObjectNode items = optionsProp.putObject("items");
+        items.put("type", "object");
+        ObjectNode itemProps = items.putObject("properties");
+        itemProps.putObject("label")
+                .put("type", "string")
+                .put("description", "选项标题");
+        itemProps.putObject("description")
+                .put("type", "string")
+                .put("description", "选项说明（可选）");
+        items.putArray("required").add("label");
+        parameters.putArray("required").add("question").add("options");
+        parameters.put("additionalProperties", false);
+
+        return new ToolDefinition(
+                "ask_user",
+                "当需要向用户提问且有多个选项时使用。用户可以点选一个选项或自行输入。"
+                        + "问题应当清晰简洁，选项之间互斥。不要用于是非题（直接问即可）。",
+                parameters,
+                (arguments, context) -> {
+                    String question = arguments.path("question").asText("");
+                    var optionsNode = arguments.path("options");
+
+                    java.util.List<Map<String, String>> options = new java.util.ArrayList<>();
+                    for (JsonNode opt : optionsNode) {
+                        Map<String, String> item = new java.util.LinkedHashMap<>();
+                        item.put("label", opt.path("label").asText(""));
+                        item.put("description", opt.path("description").asText(""));
+                        options.add(item);
+                    }
+
+                    Map<String, Object> result = new java.util.LinkedHashMap<>();
+                    result.put("status", "user_question");
+                    result.put("question", question);
+                    result.put("options", options);
+                    return json.writeValueAsString(result);
                 }
         );
     }

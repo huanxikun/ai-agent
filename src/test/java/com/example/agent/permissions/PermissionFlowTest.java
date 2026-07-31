@@ -42,7 +42,7 @@ class PermissionFlowTest {
         DefaultAgentHooks.register_hooks(hooks);
         PermissionHooks.register_hooks(hooks, permissions);
         tools = new ToolRegistry(JSON, hooks);
-        new CodeTools(projectRoot, approvals, hooks, JSON).registerInto(tools);
+        new CodeTools(projectRoot, approvals, hooks, JSON, 3001).registerInto(tools);
     }
 
     @Test

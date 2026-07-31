@@ -33,17 +33,20 @@ public final class CodeTools {
     private final ObjectMapper json;
     private final HumanApprovalGate approvals;
     private final HookRegistry hooks;
+    private final int port;
 
     public CodeTools(
             Path projectRoot,
             HumanApprovalGate approvals,
             HookRegistry hooks,
-            ObjectMapper json
+            ObjectMapper json,
+            int port
     ) {
         this.projectRoot = projectRoot.toAbsolutePath().normalize();
         this.approvals = approvals;
         this.hooks = hooks;
         this.json = json;
+        this.port = port;
     }
 
     public void registerInto(ToolRegistry registry) {
@@ -307,7 +310,7 @@ public final class CodeTools {
 
         return new ToolDefinition(
                 "create_file",
-                "创建新的文本文件，绝不覆盖已有文件。调用只创建审批请求；用户批准后才落盘。",
+                "创建新的文本文件，绝不覆盖已有文件。HTML/Web 应用文件应放在 public/ 目录下。调用只创建审批请求；用户批准后才落盘。",
                 parameters,
                 (arguments, context) -> {
                     String relativePath = arguments.path("path").asText();
@@ -326,10 +329,9 @@ public final class CodeTools {
                                     context,
                                     approvedFile -> {
                                         createAtomically(approvedFile, content);
-                                        return json.writeValueAsString(Map.of(
-                                                "message", "文件创建成功",
-                                                "path", displayPath
-                                        ));
+                                        return json.writeValueAsString(
+                                                buildFileResult(displayPath, approvedFile, "文件创建成功")
+                                        );
                                     }
                             )
                     );
@@ -401,10 +403,9 @@ public final class CodeTools {
                                             );
                                         }
                                         replaceAtomically(approvedFile, after);
-                                        return json.writeValueAsString(Map.of(
-                                                "message", "文件修改成功",
-                                                "path", displayPath
-                                        ));
+                                        return json.writeValueAsString(
+                                                buildFileResult(displayPath, approvedFile, "文件修改成功")
+                                        );
                                     }
                             )
                     );
@@ -471,6 +472,26 @@ public final class CodeTools {
         return projectRoot.relativize(file)
                 .toString()
                 .replace('\\', '/');
+    }
+
+    /**
+     * 构建 create_file / edit_file 成功后的 JSON 结果。
+     * 如果文件位于 public/ 目录下且是 HTML 文件，附加可访问的 URL。
+     */
+    private Map<String, Object> buildFileResult(
+            String displayPath, Path file, String message
+    ) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("message", message);
+        result.put("path", displayPath);
+        Path publicDir = projectRoot.resolve("public");
+        if (file.startsWith(publicDir) && displayPath.endsWith(".html")) {
+            String relative = publicDir.relativize(file)
+                    .toString()
+                    .replace('\\', '/');
+            result.put("url", "http://localhost:" + port + "/" + relative);
+        }
+        return result;
     }
 
     private Path resolvedPath(HookContext context) {

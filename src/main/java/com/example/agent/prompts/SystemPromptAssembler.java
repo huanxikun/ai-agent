@@ -60,6 +60,10 @@ public final class SystemPromptAssembler {
             用户明确要求时才使用 create_file、edit_file 或 delete_file。
             这些工具只创建人工审批请求，不会立即更改磁盘。
             返回 approval_required 后不要重复调用，提示用户批准或拒绝。
+
+            创建 HTML 页面或 Web 应用（如小游戏、可视化工具）时，文件放在 public/ 目录下。
+            用户批准后，工具结果会包含可直接访问的 URL（如 http://localhost:3001/snake.html），
+            请将该 URL 以 Markdown 链接格式告知用户：[点击查看](URL)。
             """;
     private static final String EVIDENCE_SECTION = """
             ## Evidence
@@ -75,6 +79,14 @@ public final class SystemPromptAssembler {
             ## MCP Tools
             可先调用 connect_mcp 连接外部 MCP server，再使用动态注入的 mcp__server__tool 工具。
             连接成功后，后续轮次只能调用当前实际注册的 MCP 工具；不要假设未连接 server 的能力。
+            """;
+
+    private static final String ASK_USER_SECTION = """
+            ## Ask User
+            当遇到需要用户决策的问题且有多个选项时，使用 ask_user 工具向用户提问。
+            ask_user 会暂停执行，用户可选择一个选项或自行输入回答。
+            每次只问一个问题，选项之间互斥且清晰。得到回答后继续推进任务。
+            不要用 ask_user 做简单的是非题——那直接在回复中问即可。
             """;
 
     private final Path workspace;
@@ -190,6 +202,9 @@ public final class SystemPromptAssembler {
                 "delete_file"
         )) {
             sections.add(FILE_MUTATION_SECTION);
+        }
+        if (content.enabledTools().contains("ask_user")) {
+            sections.add(ASK_USER_SECTION);
         }
         if (!content.skillSection().isBlank()) {
             sections.add(content.skillSection());

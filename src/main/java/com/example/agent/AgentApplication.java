@@ -101,7 +101,7 @@ public final class AgentApplication {
                 fallbackModel
         );
 
-        CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON);
+        CodeTools codeTools = new CodeTools(projectRoot, approvals, hooks, JSON, port);
         ToolRegistry subagentTools = new ToolRegistry(JSON, hooks);
         codeTools.registerReadOnlyInto(subagentTools);
         new ToolHandlers(null, null, skillCatalog, JSON)
@@ -316,7 +316,8 @@ public final class AgentApplication {
                     out.write(("data: " + json + "\n\n").getBytes(StandardCharsets.UTF_8));
                     out.flush();
                 } catch (IOException ignored) {
-                    // 客户端已断开
+                    // 客户端已断开，通知 agent 停止执行
+                    agentLoop.requestStop();
                 }
             });
 
