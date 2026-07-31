@@ -32,8 +32,10 @@ public final class SystemPromptAssembler {
             """;
     private static final String TODO_SECTION = """
             ## Planning
-            多步骤任务先调用 todo_write 建立完整列表，并持续更新状态。
-            状态只能是 pending、in_progress 或 completed，同时最多一个 in_progress。
+            收到用户需求后，第一步必须调用 todo_write 创建完整的步骤列表，拆解为可执行的子任务。
+            每个步骤用简洁的中文描述，状态只能是 pending、in_progress 或 completed，同时最多一个 in_progress。
+            开始执行某步骤时标记为 in_progress，完成后立即标记为 completed。
+            每次工具调用后都应通过 todo_write 更新当前进度，确保步骤列表反映最新状态。
             """;
     private static final String TASK_SECTION = """
             ## Delegation
