@@ -376,6 +376,36 @@ public final class AgentLoop {
                     memoryTranscript.add(item.deepCopy());
                 }
 
+                // 有待审批操作时暂停执行，等待用户决定
+                if (!approvals.isEmpty()) {
+                    trace.add(event(
+                            "approval",
+                            "等待用户审批",
+                            "共 " + approvals.size()
+                                    + " 个操作待审批，暂停执行"
+                    ));
+                    extractMemories(memoryTranscript, trace);
+                    stopTriggered = true;
+                    triggerStop(
+                            runId,
+                            userMessage,
+                            lastStep,
+                            "pending_approval",
+                            null,
+                            trace
+                    );
+                    return new RunResult(
+                            "有 " + approvals.size()
+                                    + " 个操作等待审批，请在右侧面板批准后继续。",
+                            lastStep,
+                            toolCalls,
+                            System.currentTimeMillis() - startedAt,
+                            trace,
+                            approvals,
+                            todoStore.snapshot()
+                    );
+                }
+
                 injectBackgroundNotifications(messages, memoryTranscript, trace);
 
                 if (nagRequired) {
