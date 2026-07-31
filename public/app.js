@@ -105,32 +105,37 @@ async function submitMessage(rawMessage) {
   }
 }
 
-const TOOL_HINTS = {
-  read_file: "📖 正在读取文件…",
-  list_files: "📂 正在浏览文件…",
-  search_code: "🔍 正在搜索代码…",
-  create_file: "📝 正在创建文件…",
-  edit_file: "✏️ 正在编辑文件…",
-  delete_file: "🗑️ 正在删除文件…",
-  todo_write: "📋 正在规划步骤…",
-  connect_mcp: "🔌 正在连接工具服务…",
-  task: "🤖 正在执行子任务…",
-  load_skills: "📚 正在加载技能…",
+const TOOL_INFO = {
+  read_file: { icon: "📖", label: "读取文件" },
+  list_files: { icon: "📂", label: "浏览文件" },
+  search_code: { icon: "🔍", label: "搜索代码" },
+  create_file: { icon: "📝", label: "创建文件" },
+  edit_file: { icon: "✏️", label: "编辑文件" },
+  delete_file: { icon: "🗑️", label: "删除文件" },
+  todo_write: { icon: "📋", label: "规划步骤" },
+  connect_mcp: { icon: "🔌", label: "连接服务" },
+  task: { icon: "🤖", label: "执行子任务" },
+  load_skills: { icon: "📚", label: "加载技能" },
+  __approval: { icon: "⏳", label: "等待审批" },
 };
 
 function handleStreamEvent(data, agentMessage) {
   if (data.type === "text_delta") {
     if (!agentMessage._streamedText) {
+      collapseBubbleLines(agentMessage);
       agentMessage._streamedText = "";
+      const el = agentMessage.querySelector(".message-text");
+      const body = document.createElement("div");
+      body.className = "answer-body";
+      el.appendChild(body);
     }
     agentMessage._streamedText += data.text;
-    const el = agentMessage.querySelector(".message-text");
-    el.style.whiteSpace = "";
+    const body = agentMessage.querySelector(".answer-body");
     if (window.marked) {
-      el.innerHTML = window.marked.parse(agentMessage._streamedText)
+      body.innerHTML = window.marked.parse(agentMessage._streamedText)
         + '<span class="stream-cursor"></span>';
     } else {
-      el.textContent = agentMessage._streamedText + "▎";
+      body.textContent = agentMessage._streamedText + "▎";
     }
     elements.messages.scrollTop = elements.messages.scrollHeight;
     return;
@@ -167,9 +172,9 @@ function handleStreamEvent(data, agentMessage) {
         agentMessage._streamedText = null;
       }
     }
-    const hint = toolStatusHint(data);
-    if (hint) {
-      appendBubbleLine(agentMessage, hint);
+    const toolName = getToolName(data);
+    if (toolName) {
+      appendToolCard(agentMessage, toolName);
       elements.messages.scrollTop = elements.messages.scrollHeight;
     }
   }
@@ -182,71 +187,105 @@ function cancelStream(agentMessage) {
   }
 }
 
+function getToolName(data) {
+  if (data.kind === "model") return null;
+  if (data.kind === "tool") {
+    return data.title.replace(/^工具\s*-\s*/, "").trim();
+  }
+  if (data.kind === "approval") return "__approval";
+  return null;
+}
+
+function appendToolCard(agentMessage, toolName) {
+  const info = TOOL_INFO[toolName] ?? { icon: "🔧", label: toolName };
+  const el = agentMessage.querySelector(".message-text");
+
+  if (!agentMessage._toolCards) agentMessage._toolCards = [];
+  agentMessage._toolCards.push(info);
+
+  if (el.children.length === 0) {
+    el.textContent = "";
+    el.style.whiteSpace = "";
+  }
+
+  const card = document.createElement("div");
+  card.className = "tool-card active";
+  const icon = document.createElement("span");
+  icon.className = "tool-card-icon";
+  icon.textContent = info.icon;
+  const name = document.createElement("span");
+  name.className = "tool-card-name";
+  name.textContent = info.label;
+  card.append(icon, name);
+  el.appendChild(card);
+}
+
 function collapseBubbleLines(agentMessage) {
   const el = agentMessage.querySelector(".message-text");
-  if (agentMessage._bubbleLines && agentMessage._bubbleLines.length > 0) {
+  if (agentMessage._toolCards && agentMessage._toolCards.length > 0) {
     const details = document.createElement("details");
     details.className = "tool-trace-details";
     const summary = document.createElement("summary");
-    summary.textContent = `工具调用 (${agentMessage._bubbleLines.length})`;
-    const pre = document.createElement("pre");
-    pre.textContent = agentMessage._bubbleLines.join("\n");
-    details.append(summary, pre);
+    summary.textContent = `工具调用 (${agentMessage._toolCards.length})`;
+
+    const list = document.createElement("div");
+    list.className = "tool-card-list";
+    for (const info of agentMessage._toolCards) {
+      const card = document.createElement("div");
+      card.className = "tool-card done";
+      const icon = document.createElement("span");
+      icon.className = "tool-card-icon";
+      icon.textContent = info.icon;
+      const name = document.createElement("span");
+      name.className = "tool-card-name";
+      name.textContent = info.label;
+      card.append(icon, name);
+      list.appendChild(card);
+    }
+
+    details.append(summary, list);
     el.style.whiteSpace = "";
     el.replaceChildren(details);
   } else {
     el.style.whiteSpace = "";
     el.textContent = "";
   }
-  agentMessage._bubbleLines = null;
+  agentMessage._toolCards = null;
 }
 
 function streamMarkdown(agentMessage, text) {
   cancelStream(agentMessage);
   const el = agentMessage.querySelector(".message-text");
+  let body = el.querySelector(".answer-body");
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "answer-body";
+    el.appendChild(body);
+  }
   let pos = 0;
   const chunkSize = 3;
-  const interval = 20;
 
   agentMessage._streamTimer = setInterval(() => {
     pos += chunkSize;
     const partial = text.slice(0, pos);
-
     if (window.marked) {
-      el.innerHTML = window.marked.parse(partial)
+      body.innerHTML = window.marked.parse(partial)
         + '<span class="stream-cursor"></span>';
     } else {
-      el.textContent = partial + "▎";
+      body.textContent = partial + "▎";
     }
     elements.messages.scrollTop = elements.messages.scrollHeight;
 
     if (pos >= text.length) {
       clearInterval(agentMessage._streamTimer);
       agentMessage._streamTimer = null;
-      setMessageText(agentMessage, text);
+      if (window.marked) {
+        body.innerHTML = window.marked.parse(text);
+      } else {
+        body.textContent = text;
+      }
     }
-  }, interval);
-}
-
-function appendBubbleLine(agentMessage, text) {
-  const el = agentMessage.querySelector(".message-text");
-  if (!agentMessage._bubbleLines) agentMessage._bubbleLines = [];
-  if (el.textContent === "思考中…") {
-    agentMessage._bubbleLines = [];
-  }
-  agentMessage._bubbleLines.push(text);
-  el.style.whiteSpace = "pre-line";
-  el.textContent = agentMessage._bubbleLines.join("\n");
-}
-
-function toolStatusHint(data) {
-  if (data.kind === "model") return null;
-  if (data.kind === "tool") {
-    const name = data.title.replace(/^工具\s*-\s*/, "").trim();
-    return TOOL_HINTS[name] ?? `🔧 ${name}`;
-  }
-  if (data.kind === "approval") return "⏳ 等待审批…";
-  return null;
+  }, 20);
 }
 
 function addMessage(role, text) {
@@ -278,10 +317,22 @@ function addMessage(role, text) {
 function setMessageText(messageElement, text) {
   const el = messageElement.querySelector(".message-text");
   el.style.whiteSpace = "";
+  const details = el.querySelector(".tool-trace-details");
+
+  let body = el.querySelector(".answer-body");
+  if (!body) {
+    body = document.createElement("div");
+    body.className = "answer-body";
+  }
   if (window.marked) {
-    el.innerHTML = window.marked.parse(text);
+    body.innerHTML = window.marked.parse(text);
   } else {
-    el.textContent = text;
+    body.textContent = text;
+  }
+  if (details) {
+    el.replaceChildren(details, body);
+  } else {
+    el.replaceChildren(body);
   }
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
