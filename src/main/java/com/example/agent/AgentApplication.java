@@ -11,6 +11,7 @@ import com.example.agent.hooks.HookEvent;
 import com.example.agent.hooks.HookRegistry;
 import com.example.agent.hooks.PermissionHooks;
 import com.example.agent.memory.MemorySystem;
+import com.example.agent.mcp.client.McpManager;
 import com.example.agent.subagents.Subagent;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.tasks.TaskStore;
@@ -93,6 +94,7 @@ public final class AgentApplication {
         );
         BackgroundTaskManager backgroundTasks =
                 new BackgroundTaskManager(JSON);
+        McpManager mcpManager = new McpManager(projectRoot, JSON, env);
         ErrorRecovery errorRecovery = new ErrorRecovery(
                 model,
                 fallbackModel
@@ -126,7 +128,14 @@ public final class AgentApplication {
 
         ToolRegistry tools = new ToolRegistry(JSON, hooks);
         codeTools.registerInto(tools);
-        new ToolHandlers(todoStore, subagent, skillCatalog, taskStore, JSON)
+        new ToolHandlers(
+                todoStore,
+                subagent,
+                skillCatalog,
+                taskStore,
+                mcpManager,
+                JSON
+        )
                 .registerInto(tools);
         SystemPromptAssembler parentPrompt =
                 new SystemPromptAssembler(
@@ -173,7 +182,7 @@ public final class AgentApplication {
             health.put("ok", true);
             health.put("model", model);
             health.put("configured", !apiKey.isBlank());
-            health.put("stage", "s13-background-tasks");
+            health.put("stage", "s19-mcp-client");
             health.put("taskSystem", Map.of(
                     "enabled", true,
                     "persistent", true,
@@ -219,6 +228,13 @@ public final class AgentApplication {
             health.put("skills", Map.of(
                     "available", skillCatalog.discover().size(),
                     "onDemand", true
+            ));
+            McpManager.Summary mcpSummary = mcpManager.summary();
+            health.put("mcp", Map.of(
+                    "enabled", true,
+                    "availableServers", mcpSummary.availableServers(),
+                    "connectedServers", mcpSummary.connectedServers(),
+                    "connectedTools", mcpSummary.connectedTools()
             ));
             health.put("todos", todoStore.summary());
             health.put("subagent", Map.of(
@@ -298,7 +314,10 @@ public final class AgentApplication {
         server.setExecutor(Executors.newFixedThreadPool(
                 Math.max(4, Runtime.getRuntime().availableProcessors())
         ));
-        Runtime.getRuntime().addShutdownHook(new Thread(backgroundTasks::close));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            backgroundTasks.close();
+            mcpManager.close();
+        }));
         server.start();
 
         System.out.printf("Agent 已启动：http://localhost:%d%n", port);

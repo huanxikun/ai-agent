@@ -22,7 +22,7 @@ public final class ToolRegistry {
         this.hooks = hooks;
     }
 
-    public ToolRegistry register(ToolDefinition tool){
+    public synchronized ToolRegistry register(ToolDefinition tool){
         if(tools.containsKey(tool.name())){
             throw new IllegalArgumentException("工具重复注册:"+tool.name());
         }
@@ -30,27 +30,42 @@ public final class ToolRegistry {
         return this;
     }
 
-    public boolean hasTool(String name) {
+    public synchronized boolean hasTool(String name) {
         return tools.containsKey(name);
     }
 
-    public boolean supportsBackground(String name) {
+    public synchronized boolean supportsBackground(String name) {
         ToolDefinition tool = tools.get(name);
         return tool != null && tool.supportsBackground();
     }
 
-    public List<String> toolNames() {
+    public synchronized List<String> toolNames() {
         return List.copyOf(tools.keySet());
     }
 
-    public List<String> backgroundToolNames() {
+    public synchronized List<String> backgroundToolNames() {
         return tools.values().stream()
                 .filter(ToolDefinition::supportsBackground)
                 .map(ToolDefinition::name)
                 .toList();
     }
 
-    public ArrayNode definitions(){
+    public synchronized List<String> mcpServers() {
+        return tools.values().stream()
+                .filter(ToolDefinition::isMcp)
+                .map(ToolDefinition::mcpServer)
+                .distinct()
+                .toList();
+    }
+
+    public synchronized List<String> mcpToolNames() {
+        return tools.values().stream()
+                .filter(ToolDefinition::isMcp)
+                .map(ToolDefinition::name)
+                .toList();
+    }
+
+    public synchronized ArrayNode definitions(){
         ArrayNode definitions = json.createArrayNode();
 
         for(ToolDefinition tool : tools.values()){
@@ -62,7 +77,7 @@ public final class ToolRegistry {
         return definitions;
     }
 
-    public String execute(
+    public synchronized String execute(
             String name,
             JsonNode arguments,
             HookContext context

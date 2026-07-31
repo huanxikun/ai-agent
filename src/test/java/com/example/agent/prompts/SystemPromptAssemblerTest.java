@@ -197,6 +197,41 @@ class SystemPromptAssemblerTest {
         ).contains("background_tasks"));
     }
 
+    @Test
+    void includesMcpSectionWhenConnectToolOrMcpToolsArePresent()
+            throws Exception {
+        ToolRegistry tools = new ToolRegistry(JSON, new HookRegistry());
+        tools.register(tool("connect_mcp"));
+        SystemPromptAssembler assembler = assembler(
+                tools,
+                null,
+                null,
+                SystemPromptAssembler.AgentRole.PARENT
+        );
+
+        String initial = assembler.get_system_prompt(
+                assembler.update_content()
+        );
+        assertTrue(initial.contains("## MCP Tools"));
+        assertTrue(initial.contains("已连接 server：(none)"));
+
+        tools.register(new ToolDefinition(
+                "mcp__workspace__read_file",
+                "remote read",
+                JSON.createObjectNode().put("type", "object"),
+                (arguments, context) -> "{}",
+                false,
+                "workspace"
+        ));
+        String changed = assembler.get_system_prompt(
+                assembler.update_content()
+        );
+        assertTrue(changed.contains("已连接 server：workspace"));
+        assertTrue(assembler.loadedSections(
+                assembler.update_content()
+        ).contains("mcp"));
+    }
+
     private SystemPromptAssembler assembler(
             ToolRegistry tools,
             SkillCatalog skills,

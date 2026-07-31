@@ -1,5 +1,6 @@
 package com.example.agent.tools;
 
+import com.example.agent.mcp.client.McpManager;
 import com.example.agent.subagents.SubagentExecutor;
 import com.example.agent.skills.SkillCatalog;
 import com.example.agent.tasks.PersistentTask;
@@ -33,6 +34,7 @@ public final class ToolHandlers {
     private final SubagentExecutor subagent;
     private final SkillCatalog skillCatalog;
     private final TaskStore taskStore;
+    private final McpManager mcpManager;
     private final ObjectMapper json;
 
     public ToolHandlers(TodoStore todoStore, ObjectMapper json) {
@@ -61,18 +63,31 @@ public final class ToolHandlers {
             SubagentExecutor subagent,
             SkillCatalog skillCatalog,
             TaskStore taskStore,
+            McpManager mcpManager,
             ObjectMapper json
     ) {
         this.todoStore = todoStore;
         this.subagent = subagent;
         this.skillCatalog = skillCatalog;
         this.taskStore = taskStore;
+        this.mcpManager = mcpManager;
         this.json = json;
+    }
+
+    public ToolHandlers(
+            TodoStore todoStore,
+            SubagentExecutor subagent,
+            SkillCatalog skillCatalog,
+            TaskStore taskStore,
+            ObjectMapper json
+    ) {
+        this(todoStore, subagent, skillCatalog, taskStore, null, json);
     }
 
     public void registerInto(ToolRegistry registry) {
         if (todoStore != null) registry.register(todoWrite());
         if (subagent != null) registry.register(task());
+        if (mcpManager != null) registry.register(connectMcp(registry));
         registerSkillInto(registry);
         registerTaskSystemInto(registry);
     }
@@ -396,6 +411,34 @@ public final class ToolHandlers {
                     ));
                 },
                 true
+        );
+    }
+
+    private ToolDefinition connectMcp(ToolRegistry registry) {
+        ObjectNode parameters = objectParameters();
+        ((ObjectNode) parameters.path("properties"))
+                .putObject("name")
+                .put("type", "string")
+                .put("description", "要连接的 MCP server，默认 workspace，可选 filesystem、scm");
+
+        return new ToolDefinition(
+                "connect_mcp",
+                "连接一个 MCP server，发现其工具并动态加入当前 Agent 工具池。默认连接 workspace 聚合 server。",
+                parameters,
+                (arguments, context) -> {
+                    String requested = arguments.path("name").asText("workspace").trim();
+                    McpManager.ConnectResult result = mcpManager.connect(
+                            requested,
+                            registry
+                    );
+                    return json.writeValueAsString(Map.of(
+                            "status", result.alreadyConnected()
+                                    ? "already_connected"
+                                    : "connected",
+                            "server", result.serverName(),
+                            "toolNames", result.toolNames()
+                    ));
+                }
         );
     }
 }

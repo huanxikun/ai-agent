@@ -69,6 +69,11 @@ public final class SystemPromptAssembler {
             Harness 会在每次业务模型调用前运行 L3→L1→L2，并在超阈值时运行 L4。
             只有业务 LLM 返回 prompt_too_long/413 才触发 reactiveCompact。
             """;
+    private static final String MCP_SECTION = """
+            ## MCP Tools
+            可先调用 connect_mcp 连接外部 MCP server，再使用动态注入的 mcp__server__tool 工具。
+            连接成功后，后续轮次只能调用当前实际注册的 MCP 工具；不要假设未连接 server 的能力。
+            """;
 
     private final Path workspace;
     private final ToolRegistry tools;
@@ -117,6 +122,7 @@ public final class SystemPromptAssembler {
                 workspace.toString(),
                 enabledTools,
                 tools.backgroundToolNames(),
+                tools.mcpServers(),
                 skillSection,
                 memorySection,
                 contextCompactEnabled
@@ -166,6 +172,14 @@ public final class SystemPromptAssembler {
         }
         if (!content.backgroundTools().isEmpty()) {
             sections.add(BACKGROUND_TASK_SECTION);
+        }
+        if (!content.mcpServers().isEmpty()
+                || content.enabledTools().contains("connect_mcp")) {
+            sections.add(MCP_SECTION + System.lineSeparator()
+                    + "已连接 server："
+                    + (content.mcpServers().isEmpty()
+                    ? "(none)"
+                    : String.join(", ", content.mcpServers())));
         }
         if (hasAny(
                 content.enabledTools(),
@@ -237,6 +251,10 @@ public final class SystemPromptAssembler {
                 "complete_task"
         )) sections.add("persistent_tasks");
         if (!content.backgroundTools().isEmpty()) sections.add("background_tasks");
+        if (!content.mcpServers().isEmpty()
+                || content.enabledTools().contains("connect_mcp")) {
+            sections.add("mcp");
+        }
         if (hasAny(
                 content.enabledTools(),
                 "create_file",
@@ -266,6 +284,7 @@ public final class SystemPromptAssembler {
             String workspace,
             List<String> enabledTools,
             List<String> backgroundTools,
+            List<String> mcpServers,
             String skillSection,
             String memorySection,
             boolean contextCompactEnabled
@@ -273,6 +292,7 @@ public final class SystemPromptAssembler {
         public PromptContent {
             enabledTools = List.copyOf(enabledTools);
             backgroundTools = List.copyOf(backgroundTools);
+            mcpServers = List.copyOf(mcpServers);
             skillSection = skillSection == null ? "" : skillSection;
             memorySection = memorySection == null ? "" : memorySection;
         }
