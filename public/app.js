@@ -141,29 +141,28 @@ async function submitMessage(rawMessage) {
 }
 
 function startTotalTimer(agentMessage) {
-  const body = agentMessage.querySelector(".message-body");
-  if (!body) return;
-  const badge = document.createElement("div");
-  badge.className = "message-duration";
-  body.insertBefore(badge, body.firstChild);
   agentMessage._totalStart = Date.now();
-  agentMessage._totalInterval = setInterval(() => {
-    badge.textContent = "⏱ " + formatDuration(Date.now() - agentMessage._totalStart);
-  }, 200);
 }
 
 function stopTotalTimer(agentMessage, finalMs) {
   if (agentMessage._totalInterval) {
     clearInterval(agentMessage._totalInterval);
     agentMessage._totalInterval = null;
-  } else if (finalMs === undefined) {
-    return;
   }
-  const badge = agentMessage.querySelector(".message-duration");
-  if (badge) {
-    const ms = finalMs ?? (agentMessage._totalStart ? Date.now() - agentMessage._totalStart : 0);
-    badge.textContent = "⏱ 总计 " + formatDuration(ms);
-  }
+  const ms = finalMs ?? (agentMessage._totalStart ? Date.now() - agentMessage._totalStart : 0);
+  if (ms <= 0) return;
+
+  const body = agentMessage.querySelector(".message-body");
+  if (!body) return;
+
+  // 在消息底部添加一个小标签显示总耗时
+  const footer = document.createElement("div");
+  footer.className = "message-footer";
+  const timeLabel = document.createElement("span");
+  timeLabel.className = "message-total-time";
+  timeLabel.textContent = formatDuration(ms);
+  footer.appendChild(timeLabel);
+  body.appendChild(footer);
 }
 
 function setStopMode(active) {
@@ -198,6 +197,8 @@ function finalizeOnStop(agentMessage) {
   }
   // 折叠活跃的工具卡片
   foldToolCards(agentMessage);
+  // 显示总耗时（停止场景）
+  stopTotalTimer(agentMessage);
 
   // 如果消息体没有任何实际内容，添加中断提示
   const body = agentMessage.querySelector(":scope > .message-body");
@@ -219,7 +220,7 @@ function appendStopNotice(agentMessage) {
   if (!body) return;
   const notice = document.createElement("div");
   notice.className = "stop-notice";
-  notice.textContent = "⏹ 已停止";
+  notice.textContent = "已停止";
   body.appendChild(notice);
 }
 
@@ -283,7 +284,7 @@ function handleStreamEvent(data, agentMessage) {
       if (timeSpan && !timeSpan._interval) {
         const start = Date.now();
         timeSpan._interval = setInterval(() => {
-          timeSpan.textContent = "⏱ " + formatDuration(Date.now() - start);
+          timeSpan.textContent = formatDuration(Date.now() - start);
         }, 200);
       }
     }
@@ -301,7 +302,7 @@ function handleStreamEvent(data, agentMessage) {
       card.classList.remove("active");
       card.classList.add("done");
       if (timeSpan) {
-        timeSpan.textContent = "⏱ " + formatDuration(data.durationMs ?? 0);
+        timeSpan.textContent = formatDuration(data.durationMs ?? 0);
       }
     });
     return;
@@ -441,16 +442,19 @@ function appendToolCard(agentMessage, toolName) {
 
   const card = document.createElement("div");
   card.className = "tool-card active";
+  const left = document.createElement("span");
+  left.className = "tool-card-left";
   const icon = document.createElement("span");
   icon.className = "tool-card-icon";
   icon.textContent = info.icon;
   const name = document.createElement("span");
   name.className = "tool-card-name";
   name.textContent = info.label;
+  left.append(icon, name);
   const time = document.createElement("span");
   time.className = "tool-card-time";
-  time.textContent = "⏱";
-  card.append(icon, name, time);
+  time.textContent = "";
+  card.append(left, time);
   el.appendChild(card);
 }
 
@@ -466,24 +470,40 @@ function foldToolCards(agentMessage) {
     return;
   }
 
+  // 计算工具总耗时
+  let totalToolMs = 0;
+  existingCards.forEach(card => {
+    card.classList.remove("active");
+    card.classList.add("done");
+    const ts = card.querySelector(".tool-card-time");
+    if (ts && ts._interval) {
+      clearInterval(ts._interval);
+      ts._interval = null;
+    }
+    if (ts && ts.textContent) {
+      const m = ts.textContent.match(/([\d.]+)\s*(ms|s)/);
+      if (m) {
+        totalToolMs += m[2] === "s" ? parseFloat(m[1]) * 1000 : parseInt(m[1]);
+      }
+    }
+  });
+
   const details = document.createElement("details");
   details.className = "tool-trace-details";
   const summary = document.createElement("summary");
-  summary.textContent = `工具调用 (${agentMessage._toolCards.length})`;
+  const summaryText = document.createElement("span");
+  summaryText.className = "tool-summary-label";
+  summaryText.textContent = `${agentMessage._toolCards.length} 个工具调用`;
+  const summaryTime = document.createElement("span");
+  summaryTime.className = "tool-summary-time";
+  summaryTime.textContent = formatDuration(totalToolMs);
+  summary.append(summaryText, summaryTime);
 
   const list = document.createElement("div");
   list.className = "tool-card-list";
 
   // 移动现有卡片而非重新创建（保留计时信息）
   existingCards.forEach(card => {
-    card.classList.remove("active");
-    card.classList.add("done");
-    // 停止卡片上的计时器
-    const ts = card.querySelector(".tool-card-time");
-    if (ts && ts._interval) {
-      clearInterval(ts._interval);
-      ts._interval = null;
-    }
     list.appendChild(card);
   });
 

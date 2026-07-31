@@ -401,20 +401,30 @@ button { color: inherit; }
 
 .tool-trace-details summary:hover { color: var(--text); }
 
+.tool-summary-label {
+  flex: 1;
+}
+
+.tool-summary-time {
+  font: 500 11px/1 ui-monospace, monospace;
+  color: var(--muted-2);
+}
+
 .tool-card-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  flex-direction: column;
+  gap: 4px;
   padding: 0 12px 10px;
 }
 
 /* ── Tool cards ───────────────────────────────── */
 
 .tool-card {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 11px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--panel-2);
@@ -424,6 +434,12 @@ button { color: inherit; }
   animation: enter 180ms ease-out;
 }
 
+.tool-card-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .tool-card.active {
   border-color: var(--accent-border);
   background: var(--accent-soft);
@@ -431,7 +447,7 @@ button { color: inherit; }
 }
 
 .tool-card.done {
-  opacity: 0.6;
+  opacity: 0.55;
 }
 
 .tool-card.done:hover { opacity: 1; }
@@ -443,10 +459,10 @@ button { color: inherit; }
 }
 
 .tool-card-time {
-  margin-left: 2px;
-  font: 500 10px/1 ui-monospace, monospace;
+  font: 500 10.5px/1 ui-monospace, monospace;
   color: var(--muted-2);
-  opacity: 0.8;
+  opacity: 0.7;
+  white-space: nowrap;
 }
 
 .tool-card.active .tool-card-time {
@@ -454,18 +470,24 @@ button { color: inherit; }
   opacity: 1;
 }
 
-/* ── Duration badge ───────────────────────────── */
+/* ── Message footer (total time) ──────────────── */
 
-.message-duration {
-  display: inline-flex;
+.message-footer {
+  margin-top: 14px;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 10px;
-  padding: 3px 8px;
-  font: 500 11px/1.5 ui-monospace, monospace;
+  gap: 6px;
+}
+
+.message-total-time {
+  font: 400 11.5px/1 ui-monospace, monospace;
   color: var(--muted-2);
-  background: var(--panel);
-  border-radius: 20px;
+}
+
+.message-total-time::before {
+  content: "\2014\00a0";  /* em dash + nbsp */
+  color: var(--muted-2);
+  opacity: 0.6;
 }
 
 /* ── Collapsible streamed text ────────────────── */
