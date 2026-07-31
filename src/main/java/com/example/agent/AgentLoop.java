@@ -9,6 +9,7 @@ import com.example.agent.hooks.HookRegistry;
 import com.example.agent.memory.MemorySystem;
 import com.example.agent.prompts.SystemPromptAssembler;
 import com.example.agent.recovery.ErrorRecovery;
+import com.example.agent.todos.TodoItem;
 import com.example.agent.todos.TodoNagReminder;
 import com.example.agent.todos.TodoStore;
 import com.example.agent.tools.ToolRegistry;
@@ -247,7 +248,8 @@ public final class AgentLoop {
                             toolCalls,
                             System.currentTimeMillis() - startedAt,
                             trace,
-                            approvals
+                            approvals,
+                            todoStore.snapshot()
                     );
                 }
                 messages.add(response.assistantMessage());
@@ -283,7 +285,8 @@ public final class AgentLoop {
                             toolCalls,
                             System.currentTimeMillis() - startedAt,
                             trace,
-                            approvals
+                            approvals,
+                            todoStore.snapshot()
                     );
                 }
 
@@ -745,7 +748,8 @@ public final class AgentLoop {
             int toolCalls,
             long durationMs,
             List<Map<String, Object>> trace,
-            List<JsonNode> approvals
+            List<JsonNode> approvals,
+            List<TodoItem> todos
     ) {
     }
 }

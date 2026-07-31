@@ -59,6 +59,13 @@
             </div>
             <button class="icon-button" id="resetButton" title="重置会话">↻</button>
           </div>
+          <div class="todo-panel" id="todoPanel" style="display:none;">
+            <div class="todo-header">
+              <span class="eyebrow">TASK STEPS</span>
+              <span class="todo-progress" id="todoProgress"></span>
+            </div>
+            <ul class="todo-list" id="todoList"></ul>
+          </div>
           <div class="trace-empty" id="traceEmpty">
             <div class="pulse-ring"><span></span></div>
             <p>发送一条消息后，这里会显示模型调用、后台任务通知、工具执行和停止条件。</p>

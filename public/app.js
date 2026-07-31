@@ -10,7 +10,10 @@ const elements = {
   traceSummary: document.querySelector("#traceSummary"),
   stepCount: document.querySelector("#stepCount"),
   toolCount: document.querySelector("#toolCount"),
-  reset: document.querySelector("#resetButton")
+  reset: document.querySelector("#resetButton"),
+  todoPanel: document.querySelector("#todoPanel"),
+  todoList: document.querySelector("#todoList"),
+  todoProgress: document.querySelector("#todoProgress")
 };
 
 let busy = false;
@@ -67,6 +70,7 @@ async function submitMessage(rawMessage) {
     if (!response.ok) throw new Error(data.error || "请求失败");
 
     setMessageText(agentMessage, data.text);
+    renderTodos(data.todos ?? []);
     for (const event of data.trace) {
       addTrace(event.kind, event.title, event.detail);
     }
@@ -121,6 +125,32 @@ function setMessageText(messageElement, text) {
     el.textContent = text;
   }
   elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+function renderTodos(todos) {
+  if (!todos || todos.length === 0) {
+    elements.todoPanel.style.display = "none";
+    return;
+  }
+  elements.todoPanel.style.display = "";
+  elements.todoList.replaceChildren();
+
+  const icons = { completed: "✓", in_progress: "●", pending: "○" };
+  for (const todo of todos) {
+    const li = document.createElement("li");
+    li.className = `todo-item ${todo.status}`;
+    const icon = document.createElement("span");
+    icon.className = "todo-icon";
+    icon.textContent = icons[todo.status] ?? "○";
+    const text = document.createElement("span");
+    text.className = "todo-text";
+    text.textContent = todo.content;
+    li.append(icon, text);
+    elements.todoList.append(li);
+  }
+
+  const done = todos.filter((t) => t.status === "completed").length;
+  elements.todoProgress.textContent = `${done}/${todos.length}`;
 }
 
 function addTrace(kind, title, detail) {
@@ -251,6 +281,7 @@ function clearTrace() {
   elements.traceList.replaceChildren();
   elements.traceEmpty.style.display = "";
   elements.traceSummary.classList.remove("visible");
+  elements.todoPanel.style.display = "none";
 }
 
 function resetPage() {
