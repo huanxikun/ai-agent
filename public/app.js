@@ -58,28 +58,38 @@ async function submitMessage(rawMessage) {
   elements.intro.classList.add("hidden");
   addMessage("user", message);
   clearTrace();
-  const agentMessage = addMessage("agent", "正在处理…");
+  const agentMessage = addMessage("agent", "思考中…");
 
   try {
-    const response = await fetch("/api/chat", {
+    const response = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message })
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "请求失败");
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || "请求失败");
+    }
 
-    setMessageText(agentMessage, data.text);
-    renderTodos(data.todos ?? []);
-    for (const event of data.trace) {
-      addTrace(event.kind, event.title, event.detail);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split("\n\n");
+      buffer = blocks.pop();
+
+      for (const block of blocks) {
+        const line = block.trim();
+        if (!line.startsWith("data: ")) continue;
+        const data = JSON.parse(line.slice(6));
+        handleStreamEvent(data, agentMessage);
+      }
     }
-    for (const approval of data.approvals ?? []) {
-      addApprovalCard(approval);
-    }
-    elements.stepCount.textContent = data.steps;
-    elements.toolCount.textContent = data.toolCalls;
-    elements.traceSummary.classList.add("visible");
   } catch (error) {
     agentMessage.classList.add("error");
     setMessageText(agentMessage, error.message);
@@ -88,6 +98,24 @@ async function submitMessage(rawMessage) {
     busy = false;
     elements.send.disabled = false;
     elements.input.focus();
+  }
+}
+
+function handleStreamEvent(data, agentMessage) {
+  if (data.type === "result") {
+    setMessageText(agentMessage, data.text);
+    renderTodos(data.todos ?? []);
+    for (const approval of data.approvals ?? []) {
+      addApprovalCard(approval);
+    }
+    elements.stepCount.textContent = data.steps;
+    elements.toolCount.textContent = data.toolCalls;
+    elements.traceSummary.classList.add("visible");
+  } else if (data.type === "error") {
+    agentMessage.classList.add("error");
+    setMessageText(agentMessage, data.error);
+  } else {
+    addTrace(data.kind, data.title, data.detail);
   }
 }
 

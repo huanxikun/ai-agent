@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * S11 Agent Cycle：在 compress + memory load 后对业务 LLM 分类恢复。
@@ -34,6 +35,7 @@ public final class AgentLoop {
     private final ToolRegistry tools;
     private final HookRegistry hooks;
     private final TodoStore todoStore;
+    private Consumer<Map<String, Object>> streamHandler;
     private final ContextCompactor contextCompactor;
     private final MemorySystem memorySystem;
     private final SystemPromptAssembler systemPromptAssembler;
@@ -739,7 +741,14 @@ public final class AgentLoop {
         value.put("kind", kind);
         value.put("title", title);
         value.put("detail", detail);
+        if (streamHandler != null) {
+            streamHandler.accept(value);
+        }
         return value;
+    }
+
+    public void setStreamHandler(Consumer<Map<String, Object>> handler) {
+        this.streamHandler = handler;
     }
 
     public record RunResult(

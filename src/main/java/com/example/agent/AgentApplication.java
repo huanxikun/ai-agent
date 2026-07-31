@@ -25,6 +25,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -274,6 +275,79 @@ public final class AgentApplication {
                 sendJson(exchange, 200, agentLoop.run(message));
             } catch (Exception exception) {
                 sendJson(exchange, 400, Map.of("error", exception.getMessage()));
+            }
+        });
+
+        server.createContext("/api/chat/stream", exchange -> {
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, Map.of("error", "Method not allowed"));
+                return;
+            }
+
+            byte[] body;
+            String message;
+            try {
+                body = exchange.getRequestBody().readNBytes(64 * 1024 + 1);
+                if (body.length > 64 * 1024) {
+                    throw new IllegalArgumentException("请求内容过大");
+                }
+                JsonNode request = JSON.readTree(body);
+                message = request.path("message").asText("").trim();
+                if (message.isEmpty()) {
+                    throw new IllegalArgumentException("message 不能为空");
+                }
+            } catch (Exception exception) {
+                sendJson(exchange, 400, Map.of("error", exception.getMessage()));
+                return;
+            }
+
+            exchange.getResponseHeaders().set(
+                    "Content-Type",
+                    "text/event-stream; charset=utf-8"
+            );
+            exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+            exchange.getResponseHeaders().set("Connection", "keep-alive");
+            exchange.sendResponseHeaders(200, 0);
+            OutputStream out = exchange.getResponseBody();
+
+            agentLoop.setStreamHandler(sseEvent -> {
+                try {
+                    String json = JSON.writeValueAsString(sseEvent);
+                    out.write(("data: " + json + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } catch (IOException ignored) {
+                    // 客户端已断开
+                }
+            });
+
+            try {
+                AgentLoop.RunResult result = agentLoop.run(message);
+
+                Map<String, Object> finalEvent = new HashMap<>();
+                finalEvent.put("type", "result");
+                finalEvent.put("text", result.text());
+                finalEvent.put("steps", result.steps());
+                finalEvent.put("toolCalls", result.toolCalls());
+                finalEvent.put("todos", result.todos());
+                finalEvent.put("approvals", result.approvals());
+                String finalJson = JSON.writeValueAsString(finalEvent);
+                out.write(("data: " + finalJson + "\n\n").getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            } catch (Exception exception) {
+                try {
+                    Map<String, Object> errorEvent = new HashMap<>();
+                    errorEvent.put("type", "error");
+                    errorEvent.put("error", exception.getMessage() != null
+                            ? exception.getMessage() : "未知错误");
+                    String errorJson = JSON.writeValueAsString(errorEvent);
+                    out.write(("data: " + errorJson + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                } catch (IOException ignored) {
+                    // 客户端已断开
+                }
+            } finally {
+                agentLoop.setStreamHandler(null);
+                out.close();
             }
         });
 
