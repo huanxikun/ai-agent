@@ -24,10 +24,11 @@ import java.util.stream.Stream;
 
 public final class CodeTools {
     private static final int MAX_FILE_LINES = 400;
-    private static final int MAX_SEARCH_RESULTS = 50;
+    private static final int MAX_SEARCH_RESULTS = 100;
     private static final int MAX_PREVIEW_CHARS = 3_000;
-    private static final int DEFAULT_LIST_DEPTH = 8;
-    private static final int MAX_LIST_DEPTH = 12;
+    private static final int DEFAULT_LIST_DEPTH = 16;
+    private static final int MAX_LIST_DEPTH = 25;
+    private static final int MAX_LIST_FILES = 2000;
 
     private final Path projectRoot;
     private final ObjectMapper json;
@@ -73,12 +74,28 @@ public final class CodeTools {
                 .toString()
                 .replace('\\', '/');
 
-        return value.startsWith(".git/")
+        // 顶层目录过滤
+        if (value.startsWith(".git/")
                 || value.startsWith("target/")
                 || value.startsWith("node_modules/")
                 || value.startsWith(".idea/")
+                || value.startsWith(".tasks/")
+                || value.startsWith(".mvn/")
                 || value.equals(".env")
-                || value.startsWith(".env.");
+                || value.startsWith(".env.")) {
+            return true;
+        }
+
+        // 任意层级的受保护目录段
+        for (Path segment : projectRoot.relativize(path)) {
+            String name = segment.toString();
+            if (name.equals(".git") || name.equals("target")
+                    || name.equals("node_modules") || name.equals(".idea")
+                    || name.equals(".tasks")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // 列出项目内的文件。
@@ -93,7 +110,7 @@ public final class CodeTools {
 
         properties.putObject("maxDepth")
                 .put("type", "integer")
-                .put("description", "最大递归层级，默认 8，建议 1 到 12");
+                .put("description", "最大递归层级，默认 16，建议 1 到 25");
 
         parameters.put("additionalProperties", false);
 
@@ -121,7 +138,7 @@ public final class CodeTools {
                                 .map(projectRoot::relativize)
                                 .map(Path::toString)
                                 .sorted()
-                                .limit(500)
+                                .limit(MAX_LIST_FILES)
                                 .reduce(
                                         (left, right) -> left + "\n" + right
                                 )
@@ -223,22 +240,33 @@ public final class CodeTools {
                 .put("type", "string")
                 .put("description", "搜索目录，默认是整个项目");
 
+        properties.putObject("case_sensitive")
+                .put("type", "boolean")
+                .put("description", "是否区分大小写，默认 false（大小写不敏感）");
+
         parameters.putArray("required").add("query");
         parameters.put("additionalProperties", false);
 
         return new ToolDefinition(
                 "search_code",
-                "在项目文本文件中搜索代码或关键词，返回文件路径、行号和匹配内容。",
+                "在项目文本文件中搜索代码或关键词，返回文件路径、行号和匹配内容。默认大小写不敏感。",
                 parameters,
                 (arguments, context) -> {
                     String query = arguments.path("query").asText();
                     String path = arguments.path("path").asText(".");
+                    boolean caseSensitive = arguments
+                            .path("case_sensitive")
+                            .asBoolean(false);
 
                     if (query.isBlank()) {
                         throw new IllegalArgumentException(
                                 "query 不能为空"
                         );
                     }
+
+                    String effectiveQuery = caseSensitive
+                            ? query
+                            : query.toLowerCase();
 
                     Path directory = resolvedPath(context);
                     StringBuilder result = new StringBuilder();
@@ -265,7 +293,12 @@ public final class CodeTools {
                                  index < lines.size();
                                  index++) {
 
-                                if (lines.get(index).contains(query)) {
+                                String line = lines.get(index);
+                                String haystack = caseSensitive
+                                        ? line
+                                        : line.toLowerCase();
+
+                                if (haystack.contains(effectiveQuery)) {
                                     result.append(
                                             projectRoot.relativize(file)
                                     );

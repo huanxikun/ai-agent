@@ -365,9 +365,12 @@ public final class AgentLoop {
                             trace.add(event(
                                     "hook",
                                     "Hook · PostToolUse",
-                                    call.name() + " · failed"
+                                    call.name() + " · failed: "
+                                            + exception.getMessage()
                             ));
-                            throw exception;
+                            output = "{\"error\": \""
+                                    + jsonEscape(exception.getMessage())
+                                    + "\"}";
                         }
                     }
 
@@ -862,6 +865,16 @@ public final class AgentLoop {
             streamHandler.accept(value);
         }
         return value;
+    }
+
+    private static String jsonEscape(String value) {
+        if (value == null) return "null";
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
     }
 
     public void setStreamHandler(Consumer<Map<String, Object>> handler) {
