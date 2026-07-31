@@ -145,11 +145,51 @@ public final class McpManager implements AutoCloseable {
                 javaCommand(),
                 List.of(
                         "-cp",
-                        System.getProperty("java.class.path"),
+                        resolveClasspath(),
                         mainClass,
                         projectRoot.toString()
                 )
         );
+    }
+
+    /**
+     * 构建子进程可用的 classpath。
+     * mvn exec:java 时 java.class.path 只有 Maven 自身，
+     * 需要从当前线程的 URLClassLoader 提取真实路径。
+     */
+    private String resolveClasspath() {
+        String sep = System.getProperty("path.separator");
+        StringBuilder cp = new StringBuilder();
+
+        String systemCp = System.getProperty("java.class.path", "");
+        if (!systemCp.isBlank()) {
+            cp.append(systemCp);
+        }
+
+        Path targetClasses = projectRoot.resolve("target/classes");
+        if (Files.isDirectory(targetClasses)) {
+            if (!cp.isEmpty()) cp.append(sep);
+            cp.append(targetClasses.toString());
+        }
+
+        try {
+            ClassLoader cl = Thread.currentThread().getContextClassLoader();
+            if (cl instanceof java.net.URLClassLoader urlCl) {
+                for (java.net.URL url : urlCl.getURLs()) {
+                    try {
+                        String path = Path.of(url.toURI()).toString();
+                        if (cp.indexOf(path) < 0) {
+                            if (!cp.isEmpty()) cp.append(sep);
+                            cp.append(path);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        return cp.toString();
     }
 
     private List<String> buildCommand(McpServerConfig config) {
