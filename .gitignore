@@ -1,4 +1,6 @@
 .env
+.env.local
+.env.*.local
 target/
 .idea/
 .agent-context/
@@ -6,3 +8,22 @@ target/
 .tasks/
 *.log
 .DS_Store
+
+# Docker volumes
+docker-compose.override.yml
+
+# Build artifacts
+*.jar
+*.war
+
+# OS files
+Thumbs.db
+*.swp
+*.swo
+
+# Deployment backups
+*.bak
+*.backup
+
+# Node modules (if any)
+node_modules/

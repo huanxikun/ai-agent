@@ -114,7 +114,12 @@ function addMessage(role, text) {
 }
 
 function setMessageText(messageElement, text) {
-  messageElement.querySelector(".message-text").textContent = text;
+  const el = messageElement.querySelector(".message-text");
+  if (window.marked) {
+    el.innerHTML = window.marked.parse(text);
+  } else {
+    el.textContent = text;
+  }
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
