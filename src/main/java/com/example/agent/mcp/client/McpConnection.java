@@ -17,6 +17,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class McpConnection implements AutoCloseable {
+    private static final long READ_TIMEOUT_MS = 10_000;
+    private static final long POLL_INTERVAL_MS = 50;
     private final String serverName;
     private final Process process;
     private final ObjectMapper json;
@@ -150,6 +152,29 @@ final class McpConnection implements AutoCloseable {
     }
 
     private JsonNode readMessage() throws IOException {
+        long deadline = System.currentTimeMillis() + READ_TIMEOUT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            if (!process.isAlive()) {
+                throw new IOException(
+                        "MCP server 进程已退出: " + serverName
+                                + " (检查 stderr 输出排查原因)"
+                );
+            }
+            if (input.available() > 0) break;
+            try {
+                Thread.sleep(POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("MCP 读取被中断", e);
+            }
+        }
+        if (input.available() <= 0) {
+            throw new IOException(
+                    "MCP server 响应超时 (" + READ_TIMEOUT_MS / 1000
+                            + "s): " + serverName
+            );
+        }
+
         String line = readHeaderLine(input);
         if (line == null) return null;
 
