@@ -39,6 +39,11 @@ function renderMarkdown(target, text) {
   }
 }
 
+function formatDuration(ms) {
+  if (ms < 1000) return Math.round(ms) + "ms";
+  return (ms / 1000).toFixed(1) + "s";
+}
+
 initialize();
 
 async function initialize() {
@@ -85,6 +90,7 @@ async function submitMessage(rawMessage) {
   addMessage("user", message);
   clearTrace();
   const agentMessage = addMessage("agent", "思考中…");
+  startTotalTimer(agentMessage);
 
   try {
     const response = await fetch("/api/chat/stream", {
@@ -126,10 +132,37 @@ async function submitMessage(rawMessage) {
       addTrace("error", "运行失败", error.message);
     }
   } finally {
+    stopTotalTimer(agentMessage);
     busy = false;
     abortController = null;
     setStopMode(false);
     elements.input.focus();
+  }
+}
+
+function startTotalTimer(agentMessage) {
+  const body = agentMessage.querySelector(".message-body");
+  if (!body) return;
+  const badge = document.createElement("div");
+  badge.className = "message-duration";
+  body.insertBefore(badge, body.firstChild);
+  agentMessage._totalStart = Date.now();
+  agentMessage._totalInterval = setInterval(() => {
+    badge.textContent = "⏱ " + formatDuration(Date.now() - agentMessage._totalStart);
+  }, 200);
+}
+
+function stopTotalTimer(agentMessage, finalMs) {
+  if (agentMessage._totalInterval) {
+    clearInterval(agentMessage._totalInterval);
+    agentMessage._totalInterval = null;
+  } else if (finalMs === undefined) {
+    return;
+  }
+  const badge = agentMessage.querySelector(".message-duration");
+  if (badge) {
+    const ms = finalMs ?? (agentMessage._totalStart ? Date.now() - agentMessage._totalStart : 0);
+    badge.textContent = "⏱ 总计 " + formatDuration(ms);
   }
 }
 
@@ -154,6 +187,13 @@ function stopAgent() {
 }
 
 function finalizeOnStop(agentMessage) {
+  // 停止活跃工具卡片的计时器
+  agentMessage.querySelectorAll(".tool-card-time").forEach(ts => {
+    if (ts._interval) {
+      clearInterval(ts._interval);
+      ts._interval = null;
+    }
+  });
   // 折叠正在流式输出的文本
   if (agentMessage._streamedText) {
     foldStreamedText(agentMessage);
@@ -238,7 +278,41 @@ function handleStreamEvent(data, agentMessage) {
     return;
   }
 
+  if (data.type === "tool_start") {
+    const cards = agentMessage.querySelectorAll(".tool-card.active");
+    const lastCard = cards[cards.length - 1];
+    if (lastCard) {
+      const timeSpan = lastCard.querySelector(".tool-card-time");
+      if (timeSpan && !timeSpan._interval) {
+        const start = Date.now();
+        timeSpan._interval = setInterval(() => {
+          timeSpan.textContent = "⏱ " + formatDuration(Date.now() - start);
+        }, 200);
+      }
+    }
+    return;
+  }
+
+  if (data.type === "tool_end") {
+    const activeCards = agentMessage.querySelectorAll(".tool-card.active");
+    activeCards.forEach(card => {
+      const timeSpan = card.querySelector(".tool-card-time");
+      if (timeSpan && timeSpan._interval) {
+        clearInterval(timeSpan._interval);
+        timeSpan._interval = null;
+      }
+      card.classList.remove("active");
+      card.classList.add("done");
+      if (timeSpan) {
+        timeSpan.textContent = "⏱ " + formatDuration(data.durationMs ?? 0);
+      }
+    });
+    return;
+  }
+
   if (data.type === "result") {
+    // 停止总计时器
+    stopTotalTimer(agentMessage, data.durationMs);
     foldToolCards(agentMessage);
     if (!agentMessage._hasUserQuestion) {
       if (agentMessage._streamedText) {
@@ -376,14 +450,19 @@ function appendToolCard(agentMessage, toolName) {
   const name = document.createElement("span");
   name.className = "tool-card-name";
   name.textContent = info.label;
-  card.append(icon, name);
+  const time = document.createElement("span");
+  time.className = "tool-card-time";
+  time.textContent = "⏱";
+  card.append(icon, name, time);
   el.appendChild(card);
 }
 
 function foldToolCards(agentMessage) {
   const el = agentMessage.querySelector(".message-text");
+  const existingCards = el.querySelectorAll(":scope > .tool-card");
+
   if (!agentMessage._toolCards || agentMessage._toolCards.length === 0) {
-    if (el.children.length === 0) {
+    if (existingCards.length === 0 && el.children.length === 0) {
       el.textContent = "";
       el.style.whiteSpace = "";
     }
@@ -397,21 +476,21 @@ function foldToolCards(agentMessage) {
 
   const list = document.createElement("div");
   list.className = "tool-card-list";
-  for (const info of agentMessage._toolCards) {
-    const card = document.createElement("div");
-    card.className = "tool-card done";
-    const icon = document.createElement("span");
-    icon.className = "tool-card-icon";
-    icon.textContent = info.icon;
-    const name = document.createElement("span");
-    name.className = "tool-card-name";
-    name.textContent = info.label;
-    card.append(icon, name);
+
+  // 移动现有卡片而非重新创建（保留计时信息）
+  existingCards.forEach(card => {
+    card.classList.remove("active");
+    card.classList.add("done");
+    // 停止卡片上的计时器
+    const ts = card.querySelector(".tool-card-time");
+    if (ts && ts._interval) {
+      clearInterval(ts._interval);
+      ts._interval = null;
+    }
     list.appendChild(card);
-  }
+  });
 
   details.append(summary, list);
-  el.querySelectorAll(":scope > .tool-card.active").forEach(c => c.remove());
   el.appendChild(details);
   agentMessage._toolCards = null;
 }

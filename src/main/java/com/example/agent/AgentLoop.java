@@ -306,6 +306,13 @@ public final class AgentLoop {
                             "工具 · " + call.name(),
                             call.arguments().toString()
                     ));
+                    long toolStartTime = System.currentTimeMillis();
+                    if (streamHandler != null) {
+                        Map<String, Object> tsEvent = new LinkedHashMap<>();
+                        tsEvent.put("type", "tool_start");
+                        tsEvent.put("name", call.name());
+                        streamHandler.accept(tsEvent);
+                    }
                     HookContext toolContext = HookContext.forTool(
                             runId,
                             userMessage,
@@ -389,6 +396,15 @@ public final class AgentLoop {
                         ));
                     } else {
                         trace.add(event("done", "工具完成 · " + call.name(), output));
+                    }
+
+                    long toolDuration = System.currentTimeMillis() - toolStartTime;
+                    if (streamHandler != null) {
+                        Map<String, Object> teEvent = new LinkedHashMap<>();
+                        teEvent.put("type", "tool_end");
+                        teEvent.put("name", call.name());
+                        teEvent.put("durationMs", toolDuration);
+                        streamHandler.accept(teEvent);
                     }
 
                     ObjectNode item = messages.addObject();

@@ -329,6 +329,7 @@ public final class AgentApplication {
                 finalEvent.put("text", result.text());
                 finalEvent.put("steps", result.steps());
                 finalEvent.put("toolCalls", result.toolCalls());
+                finalEvent.put("durationMs", result.durationMs());
                 finalEvent.put("todos", result.todos());
                 finalEvent.put("approvals", result.approvals());
                 String finalJson = JSON.writeValueAsString(finalEvent);
