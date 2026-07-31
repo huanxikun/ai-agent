@@ -167,17 +167,14 @@ function stopTotalTimer(agentMessage, finalMs) {
 }
 
 function setStopMode(active) {
-  const span = elements.send.querySelector("span");
   const b = elements.send.querySelector("b");
   if (active) {
     elements.send.classList.add("stop-mode");
     elements.send.disabled = false;
-    if (span) span.textContent = "停止";
     if (b) b.textContent = "■";
   } else {
     elements.send.classList.remove("stop-mode");
     elements.send.disabled = false;
-    if (span) span.textContent = "发送";
     if (b) b.textContent = "↑";
   }
 }
@@ -552,23 +549,32 @@ function addMessage(role, text) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
 
-  const avatar = document.createElement("div");
-  avatar.className = "avatar";
-  avatar.textContent = role === "user" ? "YOU" : "AI";
-
   const body = document.createElement("div");
   body.className = "message-body";
 
-  const meta = document.createElement("div");
-  meta.className = "message-meta";
-  meta.textContent = role === "user" ? "你" : "Agent";
+  if (role === "agent") {
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    const metaText = document.createElement("span");
+    metaText.className = "message-meta-text";
+    metaText.textContent = "Agent";
+    meta.appendChild(metaText);
 
-  const content = document.createElement("div");
-  content.className = "message-text";
-  content.textContent = text;
+    const content = document.createElement("div");
+    content.className = "message-text";
+    content.textContent = text;
 
-  body.append(meta, content);
-  article.append(avatar, body);
+    body.append(meta, content);
+    article.append(body);
+  } else {
+    const content = document.createElement("div");
+    content.className = "message-text";
+    content.textContent = text;
+
+    body.append(content);
+    article.append(body);
+  }
+
   elements.messages.append(article);
   elements.messages.scrollTop = elements.messages.scrollHeight;
   return article;
