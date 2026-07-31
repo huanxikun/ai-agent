@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="贪吃蛇小游戏" />
+    <title>贪吃蛇 · Snake</title>
+    <link rel="stylesheet" href="/snake.css" />
+  </head>
+  <body>
+    <main class="snake-shell">
+      <header class="snake-topbar">
+        <h1>贪吃蛇</h1>
+        <div class="snake-stats">
+          <div class="stat">
+            <span class="stat-label">得分</span>
+            <strong id="score">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">最高分</span>
+            <strong id="highScore">0</strong>
+          </div>
+          <div class="stat">
+            <span class="stat-label">长度</span>
+            <strong id="length">3</strong>
+          </div>
+        </div>
+      </header>
+
+      <div class="snake-game">
+        <canvas id="board" width="400" height="400" aria-label="贪吃蛇游戏画布"></canvas>
+        <div class="snake-overlay" id="overlay">
+          <div class="overlay-card">
+            <h2 id="overlayTitle">准备好了吗？</h2>
+            <p id="overlayText">按 空格 开始游戏</p>
+            <button class="overlay-btn" id="startBtn">开始游戏</button>
+          </div>
+        </div>
+      </div>
+
+      <footer class="snake-controls">
+        <p class="control-hint">
+          <span>空格 开始 / 暂停</span>
+          <span>方向键 / WASD 移动</span>
+          <span>红色食物 +10 分</span>
+        </p>
+      </footer>
+    </main>
+
+    <script src="/snake.js"></script>
+  </body>
+</html>

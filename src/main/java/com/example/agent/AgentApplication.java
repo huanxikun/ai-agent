@@ -253,6 +253,23 @@ public final class AgentApplication {
                     HookEvent.STOP.displayName(),
                     hooks.registeredCount(HookEvent.STOP)
             ));
+            // 动态返回当前网址的 host / port / baseUrl
+            String hostHeader = exchange.getRequestHeaders().getFirst("Host");
+            int actualPort = port;
+            String requestHost = "localhost";
+            if (hostHeader != null && !hostHeader.isBlank()) {
+                int colon = hostHeader.lastIndexOf(':');
+                if (colon < 0) {
+                    requestHost = hostHeader;
+                } else {
+                    requestHost = hostHeader.substring(0, colon);
+                }
+            }
+            health.put("url", Map.of(
+                    "host", requestHost,
+                    "port", actualPort,
+                    "baseUrl", "http://" + requestHost + ":" + actualPort
+            ));
             sendJson(exchange, 200, health);
         });
 
@@ -353,8 +370,16 @@ public final class AgentApplication {
             }
         });
 
-        server.createContext("/api/approvals/", exchange -> {
+        server.createContext("/api/reset", exchange -> {
             if (!"POST".equals(exchange.getRequestMethod())) {
+                sendJson(exchange, 405, Map.of("error", "Method not allowed"));
+                return;
+            }
+            agentLoop.resetConversation();
+            sendJson(exchange, 200, Map.of("status", "ok"));
+        });
+
+        server.createContext("/api/approvals/", exchange -> {            if (!"POST".equals(exchange.getRequestMethod())) {
                 sendJson(exchange, 405, Map.of("error", "Method not allowed"));
                 return;
             }

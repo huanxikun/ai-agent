@@ -45,6 +45,9 @@ public final class AgentLoop {
     private final ObjectMapper json;
     private volatile boolean stopRequested = false;
 
+    private static final int MAX_HISTORY_TURNS = 30;
+    private final List<ObjectNode> conversationHistory = new ArrayList<>();
+
     public AgentLoop(
             DeepSeekClient model,
             ToolRegistry tools,
@@ -163,6 +166,12 @@ public final class AgentLoop {
             ));
 
             injectBackgroundNotifications(messages, memoryTranscript, trace);
+
+            // 注入之前的对话历史，让 Agent 能记住上下文
+            for (ObjectNode entry : conversationHistory) {
+                messages.add(entry.deepCopy());
+            }
+
             messages.addObject()
                     .put("role", "user")
                     .put("content", userMessage);
@@ -251,6 +260,7 @@ public final class AgentLoop {
                             null,
                             trace
                     );
+                    saveConversationTurn(userMessage, exhaustedText);
                     return new RunResult(
                             exhaustedText,
                             step,
@@ -288,6 +298,7 @@ public final class AgentLoop {
                     String finalText = recoveredOutput.isEmpty()
                             ? response.text()
                             : recoveredOutput + "\n" + response.text();
+                    saveConversationTurn(userMessage, finalText.trim());
                     return new RunResult(
                             finalText.trim(),
                             step,
@@ -434,6 +445,8 @@ public final class AgentLoop {
                             null,
                             trace
                     );
+                    saveConversationTurn(userMessage,
+                            "等待你的回答：请在下方选择选项或直接输入回复。");
                     return new RunResult(
                             "等待你的回答：请在下方选择选项或直接输入回复。",
                             lastStep,
@@ -463,6 +476,9 @@ public final class AgentLoop {
                             null,
                             trace
                     );
+                    saveConversationTurn(userMessage,
+                            "有 " + approvals.size()
+                                    + " 个操作等待审批，请在右侧面板批准后继续。");
                     return new RunResult(
                             "有 " + approvals.size()
                                     + " 个操作等待审批，请在右侧面板批准后继续。",
@@ -883,6 +899,27 @@ public final class AgentLoop {
 
     public void requestStop() {
         stopRequested = true;
+    }
+
+    public void resetConversation() {
+        conversationHistory.clear();
+    }
+
+    private void saveConversationTurn(String userMessage, String assistantReply) {
+        if (userMessage == null || userMessage.isBlank()) return;
+        if (assistantReply == null || assistantReply.isBlank()) return;
+
+        conversationHistory.add(json.createObjectNode()
+                .put("role", "user")
+                .put("content", userMessage));
+        conversationHistory.add(json.createObjectNode()
+                .put("role", "assistant")
+                .put("content", assistantReply));
+
+        // 超过上限时移除最早的历史
+        while (conversationHistory.size() > MAX_HISTORY_TURNS * 2) {
+            conversationHistory.remove(0);
+        }
     }
 
     public record RunResult(

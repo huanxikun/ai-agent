@@ -782,7 +782,12 @@ function clearTrace() {
   elements.todoPanel.style.display = "none";
 }
 
-function resetPage() {
+async function resetPage() {
+  try {
+    await fetch("/api/reset", { method: "POST" });
+  } catch {
+    // 忽略网络错误
+  }
   elements.messages.replaceChildren();
   elements.intro.classList.remove("hidden");
   clearTrace();
