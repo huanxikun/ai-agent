@@ -5,13 +5,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * 只负责把 Agent Loop 的消息转换为 DeepSeek Chat Completions 请求。
@@ -68,6 +74,167 @@ public final class DeepSeekClient {
 
         JsonNode payload = send(body);
         return parseResponse(payload);
+    }
+
+    /**
+     * 流式版本：逐 token 推送给 consumer，最后返回完整 ModelResponse。
+     */
+    public ModelResponse createStreamingResponse(
+            ArrayNode messages,
+            ArrayNode tools,
+            int maxTokens,
+            String requestedModel,
+            Consumer<String> textDeltaConsumer
+    ) throws Exception {
+        if (apiKey.isBlank()) {
+            throw new IllegalStateException(
+                    "请先在 .env 中配置 DEEPSEEK_API_KEY"
+            );
+        }
+        if (maxTokens < 1) {
+            throw new IllegalArgumentException("maxTokens 必须大于 0");
+        }
+
+        ObjectNode body = json.createObjectNode();
+        body.put(
+                "model",
+                requestedModel == null || requestedModel.isBlank()
+                        ? model
+                        : requestedModel
+        );
+        body.set("messages", messages);
+        body.set("tools", tools);
+        body.put("max_tokens", maxTokens);
+        body.put("tool_choice", "auto");
+        body.put("stream", true);
+        body.putObject("thinking").put("type", "disabled");
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/chat/completions"))
+                .timeout(Duration.ofSeconds(120))
+                .header("Authorization", "Bearer " + apiKey)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(
+                        json.writeValueAsString(body)))
+                .build();
+
+        HttpResponse<java.io.InputStream> response = http.send(
+                request,
+                HttpResponse.BodyHandlers.ofInputStream()
+        );
+
+        if (response.statusCode() < 200
+                || response.statusCode() >= 300) {
+            String errorBody = new String(
+                    response.body().readAllBytes(),
+                    StandardCharsets.UTF_8
+            );
+            JsonNode errorPayload = null;
+            try {
+                errorPayload = json.readTree(errorBody);
+            } catch (Exception ignored) {
+            }
+            String message = errorPayload == null
+                    ? "DeepSeek 请求失败：" + response.statusCode()
+                    : errorPayload.path("error").path("message").asText(
+                            "DeepSeek 请求失败：" + response.statusCode()
+                    );
+            String code = errorPayload == null
+                    ? ""
+                    : errorPayload.path("error").path("code").asText("");
+            throw new DeepSeekException(
+                    response.statusCode(),
+                    code,
+                    message,
+                    parseRetryAfter(response)
+            );
+        }
+
+        StringBuilder fullText = new StringBuilder();
+        Map<Integer, ToolCallAccumulator> toolAccumulators =
+                new LinkedHashMap<>();
+        String finishReason = "";
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                        response.body(),
+                        StandardCharsets.UTF_8
+                ))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (!line.startsWith("data: ")) continue;
+                String data = line.substring(6).trim();
+                if ("[DONE]".equals(data)) break;
+
+                JsonNode chunk = json.readTree(data);
+                JsonNode choices0 = chunk.path("choices").path(0);
+                JsonNode delta = choices0.path("delta");
+
+                String content = delta.path("content").asText("");
+                if (!content.isEmpty()) {
+                    fullText.append(content);
+                    if (textDeltaConsumer != null) {
+                        textDeltaConsumer.accept(content);
+                    }
+                }
+
+                for (JsonNode tc : delta.path("tool_calls")) {
+                    int index = tc.path("index").asInt(0);
+                    ToolCallAccumulator acc =
+                            toolAccumulators.computeIfAbsent(
+                                    index,
+                                    k -> new ToolCallAccumulator()
+                            );
+                    if (tc.has("id")) {
+                        acc.id = tc.path("id").asText();
+                    }
+                    JsonNode function = tc.path("function");
+                    if (function.has("name")) {
+                        acc.name = function.path("name").asText();
+                    }
+                    acc.arguments.append(
+                            function.path("arguments").asText("")
+                    );
+                }
+
+                String fr = choices0.path("finish_reason").asText("");
+                if (!fr.isEmpty()) finishReason = fr;
+            }
+        }
+
+        List<ToolCall> calls = new ArrayList<>();
+        for (ToolCallAccumulator acc : toolAccumulators.values()) {
+            JsonNode arguments = json.readTree(acc.arguments.toString());
+            calls.add(new ToolCall(acc.id, acc.name, arguments));
+        }
+
+        String stopReason = switch (finishReason) {
+            case "length" -> "max_tokens";
+            case "tool_calls" -> "tool_use";
+            default -> "end_turn";
+        };
+
+        ObjectNode assistantMessage = json.createObjectNode();
+        assistantMessage.put("role", "assistant");
+        assistantMessage.put("content", fullText.toString());
+        if (!calls.isEmpty()) {
+            ArrayNode tcArray = assistantMessage.putArray("tool_calls");
+            for (ToolCallAccumulator acc : toolAccumulators.values()) {
+                ObjectNode tc = tcArray.addObject();
+                tc.put("id", acc.id);
+                tc.put("type", "function");
+                ObjectNode function = tc.putObject("function");
+                function.put("name", acc.name);
+                function.put("arguments", acc.arguments.toString());
+            }
+        }
+
+        return new ModelResponse(
+                fullText.toString(),
+                calls,
+                assistantMessage,
+                stopReason
+        );
     }
 
     public String summarize(ArrayNode messages) throws Exception {
@@ -235,7 +402,7 @@ public final class DeepSeekClient {
         );
     }
 
-    private Long parseRetryAfter(HttpResponse<String> response) {
+    private Long parseRetryAfter(HttpResponse<?> response) {
         String value = response.headers()
                 .firstValue("Retry-After")
                 .orElse("")
@@ -304,5 +471,11 @@ public final class DeepSeekClient {
         public Long retryAfterMs() {
             return retryAfterMs;
         }
+    }
+
+    private static final class ToolCallAccumulator {
+        String id = "";
+        String name = "";
+        final StringBuilder arguments = new StringBuilder();
     }
 }

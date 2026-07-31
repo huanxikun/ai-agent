@@ -119,9 +119,35 @@ const TOOL_HINTS = {
 };
 
 function handleStreamEvent(data, agentMessage) {
+  if (data.type === "text_delta") {
+    if (!agentMessage._streamedText) {
+      agentMessage._streamedText = "";
+    }
+    agentMessage._streamedText += data.text;
+    const el = agentMessage.querySelector(".message-text");
+    el.style.whiteSpace = "";
+    if (window.marked) {
+      el.innerHTML = window.marked.parse(agentMessage._streamedText)
+        + '<span class="stream-cursor"></span>';
+    } else {
+      el.textContent = agentMessage._streamedText + "▎";
+    }
+    elements.messages.scrollTop = elements.messages.scrollHeight;
+    return;
+  }
+
+  if (data.type === "text_clear") {
+    agentMessage._streamedText = null;
+    return;
+  }
+
   if (data.type === "result") {
     collapseBubbleLines(agentMessage);
-    streamMarkdown(agentMessage, data.text);
+    if (agentMessage._streamedText) {
+      setMessageText(agentMessage, data.text);
+    } else {
+      streamMarkdown(agentMessage, data.text);
+    }
     renderTodos(data.todos ?? []);
     for (const approval of data.approvals ?? []) {
       addApprovalCard(approval);
@@ -137,6 +163,9 @@ function handleStreamEvent(data, agentMessage) {
   } else {
     if (data.kind === "tool" || data.kind === "approval") {
       addTrace(data.kind, data.title, data.detail);
+      if (agentMessage._streamedText) {
+        agentMessage._streamedText = null;
+      }
     }
     const hint = toolStatusHint(data);
     if (hint) {

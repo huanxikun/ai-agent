@@ -488,12 +488,16 @@ public final class AgentLoop {
             int step
     ) throws Exception {
         return errorRecovery.withRetry(
-                (maxTokens, requestedModel) -> model.createResponse(
-                        requestMessages(messages, loadedMemories),
-                        tools.definitions(),
-                        maxTokens,
-                        requestedModel
-                ),
+                (maxTokens, requestedModel) -> {
+                    sendTextClear();
+                    return model.createStreamingResponse(
+                            requestMessages(messages, loadedMemories),
+                            tools.definitions(),
+                            maxTokens,
+                            requestedModel,
+                            this::onTextDelta
+                    );
+                },
                 state,
                 recoveryEvent -> trace.add(event(
                         "recovery",
@@ -504,6 +508,23 @@ public final class AgentLoop {
                                 + "，" + recoveryEvent.detail()
                 ))
         );
+    }
+
+    private void onTextDelta(String delta) {
+        if (streamHandler != null) {
+            Map<String, Object> textEvent = new LinkedHashMap<>();
+            textEvent.put("type", "text_delta");
+            textEvent.put("text", delta);
+            streamHandler.accept(textEvent);
+        }
+    }
+
+    private void sendTextClear() {
+        if (streamHandler != null) {
+            Map<String, Object> clearEvent = new LinkedHashMap<>();
+            clearEvent.put("type", "text_clear");
+            streamHandler.accept(clearEvent);
+        }
     }
 
     private ObjectNode truncatedAssistant(
