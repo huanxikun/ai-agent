@@ -101,6 +101,19 @@ async function submitMessage(rawMessage) {
   }
 }
 
+const TOOL_HINTS = {
+  read_file: "📖 正在读取文件…",
+  list_files: "📂 正在浏览文件…",
+  search_code: "🔍 正在搜索代码…",
+  create_file: "📝 正在创建文件…",
+  edit_file: "✏️ 正在编辑文件…",
+  delete_file: "🗑️ 正在删除文件…",
+  todo_write: "📋 正在规划步骤…",
+  connect_mcp: "🔌 正在连接工具服务…",
+  task: "🤖 正在执行子任务…",
+  load_skills: "📚 正在加载技能…",
+};
+
 function handleStreamEvent(data, agentMessage) {
   if (data.type === "result") {
     setMessageText(agentMessage, data.text);
@@ -116,7 +129,22 @@ function handleStreamEvent(data, agentMessage) {
     setMessageText(agentMessage, data.error);
   } else {
     addTrace(data.kind, data.title, data.detail);
+    const hint = toolStatusHint(data);
+    if (hint) {
+      agentMessage.querySelector(".message-text").textContent = hint;
+      elements.messages.scrollTop = elements.messages.scrollHeight;
+    }
   }
+}
+
+function toolStatusHint(data) {
+  if (data.kind === "model") return "思考中…";
+  if (data.kind === "tool") {
+    const name = data.title.replace(/^工具\s*-\s*/, "").trim();
+    return TOOL_HINTS[name] ?? `正在调用 ${name}…`;
+  }
+  if (data.kind === "approval") return "⏳ 等待审批…";
+  return null;
 }
 
 function addMessage(role, text) {
@@ -298,6 +326,9 @@ async function decideApproval(approval, decision, ui) {
       : "本次操作已拒绝";
     ui.approve.remove();
     ui.reject.remove();
+    if (data.status === "approved") {
+      setTimeout(() => submitMessage("审批已通过，请继续执行任务"), 600);
+    }
   } catch (error) {
     ui.result.textContent = error.message;
     ui.approve.disabled = false;
