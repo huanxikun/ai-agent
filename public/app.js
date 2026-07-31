@@ -141,28 +141,31 @@ async function submitMessage(rawMessage) {
 }
 
 function startTotalTimer(agentMessage) {
+  const body = agentMessage.querySelector(".message-body");
+  if (!body) return;
+  const label = document.createElement("div");
+  label.className = "message-total-time";
+  label.textContent = formatDuration(0);
+  body.insertBefore(label, body.firstChild);
   agentMessage._totalStart = Date.now();
+  agentMessage._totalInterval = setInterval(() => {
+    label.textContent = formatDuration(Date.now() - agentMessage._totalStart);
+  }, 200);
 }
 
 function stopTotalTimer(agentMessage, finalMs) {
   if (agentMessage._totalInterval) {
     clearInterval(agentMessage._totalInterval);
     agentMessage._totalInterval = null;
+  } else if (finalMs === undefined) {
+    return;
   }
-  const ms = finalMs ?? (agentMessage._totalStart ? Date.now() - agentMessage._totalStart : 0);
-  if (ms <= 0) return;
-
-  const body = agentMessage.querySelector(".message-body");
-  if (!body) return;
-
-  // 在消息底部添加一个小标签显示总耗时
-  const footer = document.createElement("div");
-  footer.className = "message-footer";
-  const timeLabel = document.createElement("span");
-  timeLabel.className = "message-total-time";
-  timeLabel.textContent = formatDuration(ms);
-  footer.appendChild(timeLabel);
-  body.appendChild(footer);
+  const label = agentMessage.querySelector(".message-total-time");
+  if (label) {
+    const ms = finalMs ?? (agentMessage._totalStart ? Date.now() - agentMessage._totalStart : 0);
+    label.textContent = formatDuration(ms);
+    label.classList.add("done");
+  }
 }
 
 function setStopMode(active) {
