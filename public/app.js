@@ -18,6 +18,10 @@ const elements = {
 
 let busy = false;
 
+if (window.marked) {
+  marked.setOptions({ breaks: true });
+}
+
 initialize();
 
 async function initialize() {
@@ -121,14 +125,17 @@ function handleStreamEvent(data, agentMessage) {
     for (const approval of data.approvals ?? []) {
       addApprovalCard(approval);
     }
+    addTrace("done", "任务完成", `共 ${data.steps} 步，${data.toolCalls} 次工具调用`);
     elements.stepCount.textContent = data.steps;
     elements.toolCount.textContent = data.toolCalls;
     elements.traceSummary.classList.add("visible");
-    elements.traceEmpty.style.display = "none";
   } else if (data.type === "error") {
     agentMessage.classList.add("error");
     setMessageText(agentMessage, data.error);
   } else {
+    if (data.kind === "tool" || data.kind === "approval") {
+      addTrace(data.kind, data.title, data.detail);
+    }
     const hint = toolStatusHint(data);
     if (hint) {
       appendBubbleLine(agentMessage, hint);
@@ -144,6 +151,7 @@ function appendBubbleLine(agentMessage, text) {
     agentMessage._bubbleLines = [];
   }
   agentMessage._bubbleLines.push(text);
+  el.style.whiteSpace = "pre-line";
   el.textContent = agentMessage._bubbleLines.join("\n");
 }
 
@@ -185,6 +193,7 @@ function addMessage(role, text) {
 
 function setMessageText(messageElement, text) {
   const el = messageElement.querySelector(".message-text");
+  el.style.whiteSpace = "";
   if (window.marked) {
     el.innerHTML = window.marked.parse(text);
   } else {
