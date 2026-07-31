@@ -124,24 +124,34 @@ function handleStreamEvent(data, agentMessage) {
     elements.stepCount.textContent = data.steps;
     elements.toolCount.textContent = data.toolCalls;
     elements.traceSummary.classList.add("visible");
+    elements.traceEmpty.style.display = "none";
   } else if (data.type === "error") {
     agentMessage.classList.add("error");
     setMessageText(agentMessage, data.error);
   } else {
-    addTrace(data.kind, data.title, data.detail);
     const hint = toolStatusHint(data);
     if (hint) {
-      agentMessage.querySelector(".message-text").textContent = hint;
+      appendBubbleLine(agentMessage, hint);
       elements.messages.scrollTop = elements.messages.scrollHeight;
     }
   }
 }
 
+function appendBubbleLine(agentMessage, text) {
+  const el = agentMessage.querySelector(".message-text");
+  if (!agentMessage._bubbleLines) agentMessage._bubbleLines = [];
+  if (el.textContent === "思考中…") {
+    agentMessage._bubbleLines = [];
+  }
+  agentMessage._bubbleLines.push(text);
+  el.textContent = agentMessage._bubbleLines.join("\n");
+}
+
 function toolStatusHint(data) {
-  if (data.kind === "model") return "思考中…";
+  if (data.kind === "model") return null;
   if (data.kind === "tool") {
     const name = data.title.replace(/^工具\s*-\s*/, "").trim();
-    return TOOL_HINTS[name] ?? `正在调用 ${name}…`;
+    return TOOL_HINTS[name] ?? `🔧 ${name}`;
   }
   if (data.kind === "approval") return "⏳ 等待审批…";
   return null;
