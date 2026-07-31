@@ -323,9 +323,7 @@ function handleStreamEvent(data, agentMessage) {
       }
     }
     renderTodos(data.todos ?? []);
-    for (const approval of data.approvals ?? []) {
-      addApprovalCard(approval);
-    }
+    renderApprovals(data.approvals ?? []);
     addTrace("done", "任务完成", `共 ${data.steps} 步，${data.toolCalls} 次工具调用`);
     elements.stepCount.textContent = data.steps;
     elements.toolCount.textContent = data.toolCalls;
@@ -672,8 +670,34 @@ function addTrace(kind, title, detail) {
   elements.traceList.append(item);
 }
 
-function addApprovalCard(approval) {
+const ACTION_NAMES = {
+  create: "创建",
+  edit: "修改",
+  delete: "删除"
+};
+
+function renderApprovals(approvals) {
+  if (!approvals.length) return;
+
+  // 按操作类型分组
+  const groups = {};
+  for (const a of approvals) {
+    const op = a.operation || "unknown";
+    if (!groups[op]) groups[op] = [];
+    groups[op].push(a);
+  }
+
+  for (const [op, items] of Object.entries(groups)) {
+    addGroupedApprovalCard(op, items);
+  }
+}
+
+function addGroupedApprovalCard(operation, approvals) {
   elements.traceEmpty.style.display = "none";
+  const actionName = ACTION_NAMES[operation] ?? "操作";
+  const isSingle = approvals.length === 1;
+  const count = approvals.length;
+
   const item = document.createElement("li");
   item.className = "trace-item approval";
 
@@ -683,93 +707,136 @@ function addApprovalCard(approval) {
   const header = document.createElement("div");
   header.className = "trace-title";
   const title = document.createElement("span");
-  const actionNames = {
-    create: "请求创建",
-    edit: "请求修改",
-    delete: "请求删除"
-  };
-  title.textContent = `${actionNames[approval.operation] ?? "文件操作"} · ${approval.path}`;
+  title.textContent = isSingle
+    ? `请求${actionName} · ${approvals[0].path}`
+    : `请求${actionName} ${count} 个文件`;
   const time = document.createElement("time");
   time.textContent = "等待批准";
   header.append(title, time);
 
   const card = document.createElement("div");
   card.className = "approval-card";
-  const gates = document.createElement("ul");
-  gates.className = "gate-list";
-  for (const gate of approval.gates ?? []) {
-    const row = document.createElement("li");
-    row.textContent = gate;
-    gates.append(row);
+
+  // 文件列表
+  const fileList = document.createElement("div");
+  fileList.className = "approval-file-list";
+  for (const a of approvals) {
+    const row = document.createElement("div");
+    row.className = "approval-file-row";
+    const pathSpan = document.createElement("span");
+    pathSpan.className = "approval-file-path";
+    pathSpan.textContent = a.path;
+    row.appendChild(pathSpan);
+    fileList.appendChild(row);
   }
 
-  const preview = document.createElement("pre");
-  preview.textContent = approval.preview;
+  // 预览（可折叠）
+  let previewContainer = null;
+  if (approvals.some(a => a.preview)) {
+    if (isSingle) {
+      previewContainer = document.createElement("pre");
+      previewContainer.textContent = approvals[0].preview;
+    } else {
+      const details = document.createElement("details");
+      details.className = "approval-previews";
+      const summary = document.createElement("summary");
+      summary.textContent = `预览 (${count})`;
+      details.appendChild(summary);
+      for (const a of approvals) {
+        const pre = document.createElement("pre");
+        pre.textContent = a.preview || "(无预览)";
+        details.appendChild(pre);
+      }
+      previewContainer = details;
+    }
+  }
 
+  // 状态文字
   const result = document.createElement("p");
   result.className = "approval-result";
 
+  // 操作按钮
   const actions = document.createElement("div");
   actions.className = "approval-actions";
   const reject = document.createElement("button");
   reject.type = "button";
   reject.className = "reject";
-  reject.textContent = "拒绝";
+  reject.textContent = isSingle ? "拒绝" : "全部拒绝";
   const approve = document.createElement("button");
   approve.type = "button";
-  approve.className = approval.operation === "delete" ? "danger" : "approve";
-  approve.textContent = {
-    create: "批准创建",
-    edit: "批准修改",
-    delete: "批准删除"
-  }[approval.operation] ?? "批准";
+  approve.className = operation === "delete" ? "danger" : "approve";
+  approve.textContent = isSingle
+    ? `批准${actionName}`
+    : `全部批准 (${count})`;
   actions.append(reject, approve);
 
-  reject.addEventListener("click", () => decideApproval(
-    approval,
+  reject.addEventListener("click", () => decideBatchApproval(
+    approvals,
     "reject",
-    { approve, reject, result, item }
+    { approve, reject, result, item, operation }
   ));
-  approve.addEventListener("click", () => decideApproval(
-    approval,
+  approve.addEventListener("click", () => decideBatchApproval(
+    approvals,
     "approve",
-    { approve, reject, result, item }
+    { approve, reject, result, item, operation }
   ));
 
-  card.append(gates, preview, result, actions);
+  const children = [fileList];
+  if (previewContainer) children.push(previewContainer);
+  children.push(result, actions);
+  card.append(...children);
   item.append(node, header, card);
   elements.traceList.append(item);
   elements.traceList.scrollTop = elements.traceList.scrollHeight;
 }
 
-async function decideApproval(approval, decision, ui) {
+async function decideBatchApproval(approvals, decision, ui) {
   ui.approve.disabled = true;
   ui.reject.disabled = true;
-  ui.result.textContent = decision === "approve" ? "正在执行…" : "正在拒绝…";
 
-  try {
-    const response = await fetch(
-      `/api/approvals/${encodeURIComponent(approval.approvalId)}`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision })
-      }
-    );
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "审批处理失败");
+  const actionName = ACTION_NAMES[ui.operation] ?? "操作";
+  const isApprove = decision === "approve";
+  const actionText = isApprove ? "正在批准" : "正在拒绝";
+  ui.result.textContent = approvals.length === 1
+    ? `${actionText}…`
+    : `${actionText} ${approvals.length} 个操作…`;
 
-    ui.item.classList.add(data.status === "approved" ? "done" : "rejected");
-    ui.result.textContent = data.status === "approved"
-      ? `${data.path} 已执行`
-      : "本次操作已拒绝";
+  let approvedCount = 0;
+  let errors = [];
+
+  for (let i = 0; i < approvals.length; i++) {
+    if (approvals.length > 1) {
+      ui.result.textContent = `${actionText}… (${i + 1}/${approvals.length})`;
+    }
+    try {
+      const response = await fetch(
+        `/api/approvals/${encodeURIComponent(approvals[i].approvalId)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ decision })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "审批处理失败");
+      if (data.status === "approved") approvedCount++;
+    } catch (error) {
+      errors.push(error.message);
+    }
+  }
+
+  if (errors.length === 0) {
+    ui.item.classList.add(isApprove ? "done" : "rejected");
+    ui.result.textContent = isApprove
+      ? `${approvedCount} 个${actionName}操作已执行`
+      : `${approvals.length} 个操作已拒绝`;
     ui.approve.remove();
     ui.reject.remove();
-    if (data.status === "approved") {
+    if (approvedCount > 0) {
       setTimeout(() => submitMessage("审批已通过，请继续执行任务"), 600);
     }
-  } catch (error) {
-    ui.result.textContent = error.message;
+  } else {
+    ui.result.textContent = `部分失败：${errors.join("; ")}`;
     ui.approve.disabled = false;
     ui.reject.disabled = false;
   }

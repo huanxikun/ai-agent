@@ -920,19 +920,69 @@ textarea::placeholder { color: var(--muted-2); }
   background: var(--panel);
 }
 
-.gate-list {
-  margin: 0 0 10px;
-  padding: 0;
-  list-style: none;
-  color: var(--muted);
-  font: 11px/1.7 ui-monospace, monospace;
+.approval-file-list {
+  margin-bottom: 8px;
 }
 
-.gate-list li:last-child { color: var(--warn); }
+.approval-file-row {
+  padding: 3px 0;
+  font: 12px/1.5 ui-monospace, monospace;
+  color: var(--text);
+  border-bottom: 1px solid var(--line-soft);
+}
 
-.approval-card pre {
+.approval-file-row:last-child {
+  border-bottom: 0;
+}
+
+.approval-file-path {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.approval-previews {
+  margin-bottom: 8px;
+}
+
+.approval-previews summary {
+  padding: 6px 0;
+  cursor: pointer;
+  color: var(--muted);
+  font: 500 12px/1 "Inter", sans-serif;
+  user-select: none;
+  list-style: none;
+}
+
+.approval-previews summary::-webkit-details-marker { display: none; }
+
+.approval-previews summary::before {
+  content: "\25B8";
+  font-size: 10px;
+  margin-right: 6px;
+  transition: transform 150ms;
+}
+
+.approval-previews[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.approval-previews pre {
+  max-height: 150px;
+  margin: 4px 0;
+  padding: 9px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #c9ceca;
+  background: #131312;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-xs);
+  font: 10px/1.55 ui-monospace, monospace;
+}
+
+.approval-card > pre {
   max-height: 180px;
-  margin: 0;
+  margin: 0 0 8px;
   padding: 9px;
   overflow: auto;
   white-space: pre-wrap;
@@ -948,7 +998,8 @@ textarea::placeholder { color: var(--muted-2); }
 
 .messages,
 .trace-list,
-.approval-card pre {
+.approval-card > pre,
+.approval-previews pre {
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
 }
