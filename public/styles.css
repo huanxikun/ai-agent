@@ -409,6 +409,31 @@ button { color: inherit; }
 
 .answer-body { margin-top: 2px; }
 
+.text-section-details {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(17, 19, 19, 0.3);
+  overflow: hidden;
+}
+
+.text-section-details summary {
+  padding: 7px 14px;
+  cursor: pointer;
+  color: var(--muted);
+  font: 500 12px/1 Inter, sans-serif;
+  user-select: none;
+  transition: color 150ms;
+}
+
+.text-section-details summary:hover { color: var(--text); }
+.text-section-details summary::marker { color: #8fcc4f; }
+
+.text-section-details .answer-body {
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+}
+
 .answer-body > :first-child { margin-top: 0; }
 .answer-body > :last-child { margin-bottom: 0; }
 

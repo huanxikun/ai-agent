@@ -128,6 +128,58 @@ S10/S13 的运行时 Prompt 会根据实际注册工具按需加入 `Persistent 
 }
 ```
 
+## HTTP API
+
+服务启动后（默认 `http://localhost:3000`，见 `.env` 的 `PORT`），暴露以下端点。所有请求体均为 JSON，全部要求 `Content-Type: application/json`。
+
+| 方法 | 路径 | 请求体 | 说明 |
+|---|---|---|---|
+| `GET` | `/api/health` | 无 | 子系统健康与配置汇总 |
+| `POST` | `/api/chat` | `{"message": "..."}` | 单次对话，返回完整执行结果 |
+| `POST` | `/api/chat/stream` | `{"message": "..."}` | SSE 流式对话 |
+| `POST` | `/api/approvals/{id}` | `{"decision": "approve\|reject"}` | 对挂起的审批决策 |
+| `GET` | `/` | 无 | 前端静态资源（`public/`） |
+
+### POST /api/chat
+
+体限制 64 KiB。`message` 非空，否则返回 `400`：
+
+```json
+{ "message": "列出项目文件" }
+```
+
+成功返回 `200`，响应为 `AgentLoop.RunResult` 的 JSON 序列化（含 `text`、`steps`、`toolCalls`、`todos`、`approvals` 等）：
+
+```json
+{
+  "text": "Agent 回复文本",
+  "steps": 3,
+  "toolCalls": 2,
+  "todos": [],
+  "approvals": []
+}
+```
+
+### POST /api/chat/stream
+
+体限制 64 KiB，`message` 非空。响应 `Content-Type: text/event-stream; charset=utf-8`，逐条推送 `data:` 事件，每条 SSE 数据是一个 JSON 对象；结束后追加一条 `type:"result"` 的最终事件（含 `text`、`steps`、`toolCalls`、`todos`、`approvals`）：
+
+```text
+data: {"type":"result","text":"...","steps":3,"toolCalls":2,"todos":[],"approvals":[]}
+```
+
+执行异常时改为推送 `type:"error"` 事件。
+
+### POST /api/approvals/{id}
+
+体限制 4 KiB，`decision` 只能是 `approve` 或 `reject`。`{id}` 为审批流水号，不能为空且不得含 `/`；非法值或非法 `decision` 返回 `400`。成功返回 `200` 及审批结果。
+
+### 错误与状态码
+
+- 非法 HTTP 方法（如对 `/api/chat` 用 `GET`）：`405 Method not allowed`
+- 请求解析失败、体超限、字段缺失/非法：`400`，响应 `{"error": "..."}`
+- 端口被占用：启动时直接抛错并提示设置其他 `PORT`
+
 ## 保留能力
 
 - S03：文件创建、修改、删除与三道权限闸门

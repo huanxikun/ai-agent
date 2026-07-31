@@ -122,7 +122,7 @@ const TOOL_INFO = {
 function handleStreamEvent(data, agentMessage) {
   if (data.type === "text_delta") {
     if (!agentMessage._streamedText) {
-      collapseBubbleLines(agentMessage);
+      foldToolCards(agentMessage);
       agentMessage._streamedText = "";
       const el = agentMessage.querySelector(".message-text");
       const body = document.createElement("div");
@@ -130,7 +130,7 @@ function handleStreamEvent(data, agentMessage) {
       el.appendChild(body);
     }
     agentMessage._streamedText += data.text;
-    const body = agentMessage.querySelector(".answer-body");
+    const body = agentMessage.querySelector(".message-text > .answer-body");
     if (window.marked) {
       body.innerHTML = window.marked.parse(agentMessage._streamedText)
         + '<span class="stream-cursor"></span>';
@@ -147,7 +147,7 @@ function handleStreamEvent(data, agentMessage) {
   }
 
   if (data.type === "result") {
-    collapseBubbleLines(agentMessage);
+    foldToolCards(agentMessage);
     if (agentMessage._streamedText) {
       setMessageText(agentMessage, data.text);
     } else {
@@ -169,7 +169,7 @@ function handleStreamEvent(data, agentMessage) {
     if (data.kind === "tool" || data.kind === "approval") {
       addTrace(data.kind, data.title, data.detail);
       if (agentMessage._streamedText) {
-        agentMessage._streamedText = null;
+        foldStreamedText(agentMessage);
       }
     }
     const toolName = getToolName(data);
@@ -203,7 +203,8 @@ function appendToolCard(agentMessage, toolName) {
   if (!agentMessage._toolCards) agentMessage._toolCards = [];
   agentMessage._toolCards.push(info);
 
-  if (el.children.length === 0) {
+  const hasRealContent = el.querySelector("details, .tool-card, .answer-body");
+  if (!hasRealContent) {
     el.textContent = "";
     el.style.whiteSpace = "";
   }
@@ -220,43 +221,67 @@ function appendToolCard(agentMessage, toolName) {
   el.appendChild(card);
 }
 
-function collapseBubbleLines(agentMessage) {
+function foldToolCards(agentMessage) {
   const el = agentMessage.querySelector(".message-text");
-  if (agentMessage._toolCards && agentMessage._toolCards.length > 0) {
-    const details = document.createElement("details");
-    details.className = "tool-trace-details";
-    const summary = document.createElement("summary");
-    summary.textContent = `工具调用 (${agentMessage._toolCards.length})`;
-
-    const list = document.createElement("div");
-    list.className = "tool-card-list";
-    for (const info of agentMessage._toolCards) {
-      const card = document.createElement("div");
-      card.className = "tool-card done";
-      const icon = document.createElement("span");
-      icon.className = "tool-card-icon";
-      icon.textContent = info.icon;
-      const name = document.createElement("span");
-      name.className = "tool-card-name";
-      name.textContent = info.label;
-      card.append(icon, name);
-      list.appendChild(card);
+  if (!agentMessage._toolCards || agentMessage._toolCards.length === 0) {
+    if (el.children.length === 0) {
+      el.textContent = "";
+      el.style.whiteSpace = "";
     }
-
-    details.append(summary, list);
-    el.style.whiteSpace = "";
-    el.replaceChildren(details);
-  } else {
-    el.style.whiteSpace = "";
-    el.textContent = "";
+    return;
   }
+
+  const details = document.createElement("details");
+  details.className = "tool-trace-details";
+  const summary = document.createElement("summary");
+  summary.textContent = `工具调用 (${agentMessage._toolCards.length})`;
+
+  const list = document.createElement("div");
+  list.className = "tool-card-list";
+  for (const info of agentMessage._toolCards) {
+    const card = document.createElement("div");
+    card.className = "tool-card done";
+    const icon = document.createElement("span");
+    icon.className = "tool-card-icon";
+    icon.textContent = info.icon;
+    const name = document.createElement("span");
+    name.className = "tool-card-name";
+    name.textContent = info.label;
+    card.append(icon, name);
+    list.appendChild(card);
+  }
+
+  details.append(summary, list);
+  el.querySelectorAll(":scope > .tool-card.active").forEach(c => c.remove());
+  el.appendChild(details);
   agentMessage._toolCards = null;
+}
+
+function foldStreamedText(agentMessage) {
+  if (!agentMessage._streamedText) return;
+
+  const el = agentMessage.querySelector(".message-text");
+  const body = el.querySelector(":scope > .answer-body");
+  if (!body) { agentMessage._streamedText = null; return; }
+
+  body.querySelector(".stream-cursor")?.remove();
+
+  const details = document.createElement("details");
+  details.className = "text-section-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "模型回答";
+  details.appendChild(summary);
+
+  el.insertBefore(details, body);
+  details.appendChild(body);
+
+  agentMessage._streamedText = null;
 }
 
 function streamMarkdown(agentMessage, text) {
   cancelStream(agentMessage);
   const el = agentMessage.querySelector(".message-text");
-  let body = el.querySelector(".answer-body");
+  let body = el.querySelector(":scope > .answer-body");
   if (!body) {
     body = document.createElement("div");
     body.className = "answer-body";
@@ -317,22 +342,17 @@ function addMessage(role, text) {
 function setMessageText(messageElement, text) {
   const el = messageElement.querySelector(".message-text");
   el.style.whiteSpace = "";
-  const details = el.querySelector(".tool-trace-details");
 
-  let body = el.querySelector(".answer-body");
+  let body = el.querySelector(":scope > .answer-body");
   if (!body) {
     body = document.createElement("div");
     body.className = "answer-body";
+    el.appendChild(body);
   }
   if (window.marked) {
     body.innerHTML = window.marked.parse(text);
   } else {
     body.textContent = text;
-  }
-  if (details) {
-    el.replaceChildren(details, body);
-  } else {
-    el.replaceChildren(body);
   }
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
