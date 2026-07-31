@@ -19,7 +19,7 @@ class WorkspaceMcpServerTest {
     Path tempDir;
 
     @Test
-    void workspaceServerAggregatesFilesystemAndScmTools() throws Exception {
+    void workspaceServerAggregatesScmTools() throws Exception {
         Assumptions.assumeTrue(gitAvailable());
         runGit("init");
         Files.writeString(tempDir.resolve("README.md"), "hello");
@@ -31,9 +31,6 @@ class WorkspaceMcpServerTest {
 
         JsonNode listed = server.handleRequest(request("tools/list"));
         String serialized = listed.toString();
-        assertTrue(serialized.contains("list_files"));
-        assertTrue(serialized.contains("read_file"));
-        assertTrue(serialized.contains("search_code"));
         assertTrue(serialized.contains("git_status"));
         assertTrue(serialized.contains("git_diff"));
         assertTrue(serialized.contains("git_log"));

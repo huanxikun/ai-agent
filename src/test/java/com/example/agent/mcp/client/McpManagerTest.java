@@ -11,7 +11,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -25,10 +24,6 @@ class McpManagerTest {
 
     @Test
     void connectMcpRegistersWorkspaceToolsIntoAgentRegistry() throws Exception {
-        Path file = projectRoot.resolve("src/App.java");
-        Files.createDirectories(file.getParent());
-        Files.writeString(file, "class App {}\n");
-
         try (McpManager manager = new McpManager(projectRoot, JSON, System.getenv())) {
             ToolRegistry tools = new ToolRegistry(JSON, new HookRegistry());
             new ToolHandlers(
@@ -46,15 +41,8 @@ class McpManagerTest {
                     JSON.createObjectNode().put("name", "workspace")
             ));
             assertEquals("connected", connected.path("status").asText());
-            assertTrue(tools.hasTool("mcp__workspace__read_file"));
             assertTrue(tools.hasTool("mcp__workspace__git_status"));
-
-            String output = executeTool(
-                    tools,
-                    "mcp__workspace__read_file",
-                    JSON.createObjectNode().put("path", "src/App.java")
-            );
-            assertTrue(output.contains("1 | class App {}"));
+            assertTrue(tools.hasTool("mcp__workspace__github_list_prs"));
 
             JsonNode alreadyConnected = JSON.readTree(executeTool(
                     tools,

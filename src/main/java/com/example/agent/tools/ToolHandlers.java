@@ -419,7 +419,7 @@ public final class ToolHandlers {
         ((ObjectNode) parameters.path("properties"))
                 .putObject("name")
                 .put("type", "string")
-                .put("description", "要连接的 MCP server，默认 workspace，可选 filesystem、scm");
+                .put("description", "要连接的 MCP server，默认 workspace，可选 scm");
 
         return new ToolDefinition(
                 "connect_mcp",

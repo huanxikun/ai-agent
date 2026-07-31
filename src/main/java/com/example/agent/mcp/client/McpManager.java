@@ -14,8 +14,6 @@ import java.util.List;
 import java.util.Map;
 
 public final class McpManager implements AutoCloseable {
-    private static final String DEFAULT_FILESYSTEM_MAIN =
-            "com.example.agent.mcp.filesystem.FilesystemMcpServer";
     private static final String DEFAULT_SCM_MAIN =
             "com.example.agent.mcp.scm.ScmMcpServer";
     private static final String DEFAULT_WORKSPACE_MAIN =
@@ -111,7 +109,6 @@ public final class McpManager implements AutoCloseable {
 
     private Map<String, McpServerConfig> loadConfigs() throws Exception {
         Map<String, McpServerConfig> loaded = new LinkedHashMap<>();
-        loaded.put("filesystem", defaultConfig("filesystem", DEFAULT_FILESYSTEM_MAIN));
         loaded.put("scm", defaultConfig("scm", DEFAULT_SCM_MAIN));
         loaded.put("workspace", defaultConfig("workspace", DEFAULT_WORKSPACE_MAIN));
 
