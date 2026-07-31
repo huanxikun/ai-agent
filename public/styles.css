@@ -229,6 +229,7 @@ button { color: inherit; }
 .message-text {
   line-height: 1.7;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .message-text > :first-child { margin-top: 0; }
